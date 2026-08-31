@@ -1,3 +1,3 @@
-module omarchy-citizen/backend
+module citizen-launcher/backend
 
 go 1.23

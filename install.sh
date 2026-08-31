@@ -1,60 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BIN_SRC="$ROOT/backend/bin/citizen-launcher"
+BIN_DIR="$HOME/.local/bin"
+LIB_DIR="$HOME/.local/lib/citizen-launcher"
+APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
-PLUGIN_ID="local.omarchy-citizen"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
-
-if ! command -v omarchy >/dev/null 2>&1; then
-  echo "Fehler: 'omarchy' wurde nicht gefunden."
-  echo "Dieses Plugin benötigt Omarchy Quattro mit dem Plugin-System."
-  exit 1
-fi
-
-mkdir -p "$DEST"
-
-for file in manifest.json BarWidget.qml Panel.qml citizenctl support-sanitize.py README.md INSTALLATION.md LICENSE uninstall.sh install.sh INSTALLIEREN.sh; do
-  src="$SCRIPT_DIR/$file"
-  dst="$DEST/$file"
-  if [[ "$(readlink -f "$src")" != "$(readlink -f "$dst" 2>/dev/null || printf '%s' "$dst")" ]]; then
-    cp -f -- "$src" "$dst"
-  fi
-done
-
-if [[ "$(readlink -f "$SCRIPT_DIR/backend")" != "$(readlink -f "$DEST/backend" 2>/dev/null || printf '%s' "$DEST/backend")" ]]; then
-  rm -rf -- "$DEST/backend"
-  cp -a -- "$SCRIPT_DIR/backend" "$DEST/backend"
-fi
-
-chmod +x "$DEST/citizenctl" "$DEST/support-sanitize.py" "$DEST/uninstall.sh" "$DEST/INSTALLIEREN.sh" "$DEST/backend/bin/omarchy-citizen-backend"
-
-echo "Validiere Plugin..."
-omarchy plugin validate "$DEST"
-
-echo "Lade Plugin neu..."
-omarchy-shell shell rescanPlugins
-
-echo "Aktiviere Plugin..."
-"$DEST/backend/bin/omarchy-citizen-backend" self-sync >/dev/null 2>&1 || true
-echo "Aktiviere Rundum-Sorglos Autopilot …"
-"$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" autopilot enable || {
-  echo "Hinweis: Autopilot konnte beim Installer noch nicht vollständig synchronisieren."
-  echo "Der SC-Setup-Button versucht es erneut und protokolliert die Ursache."
-}
-
-omarchy plugin enable "$PLUGIN_ID"
-
-# QML hot-reload is currently unreliable for third-party bar plugins.
-omarchy restart shell >/dev/null 2>&1 || true
-
-echo
-echo "Omarchy Citizen 0.8.1 wurde installiert:"
-echo "  $DEST"
-echo
-echo "Links-Klick auf 'SC' in der Omarchy-Leiste öffnet das Star-Citizen-Panel."
-echo
-echo "Falls 'SC' nicht sichtbar ist:"
-echo "  omarchy bar move $PLUGIN_ID --section right"
-echo
-echo "Omarchy Citizen Status:"
-bash "$DEST/citizenctl" status
+[[ -x "$BIN_SRC" ]] || { echo "Backend fehlt. Zuerst ./build.sh ausführen." >&2; exit 1; }
+mkdir -p "$BIN_DIR" "$LIB_DIR" "$APP_DIR"
+install -m755 "$BIN_SRC" "$BIN_DIR/citizen-launcher"
+install -m755 "$BIN_SRC" "$LIB_DIR/citizen-launcher"
+cat > "$APP_DIR/io.github.citizenlauncher.CitizenLauncher.desktop" <<EOF
+[Desktop Entry]
+Name=Citizen Launcher
+Comment=Star Citizen für Linux – Setup, Start, Updates und Reparatur
+Exec=$BIN_DIR/citizen-launcher gui
+Terminal=false
+Type=Application
+Categories=Game;
+StartupNotify=true
+Keywords=Star Citizen;RSI;Wine;Gaming;
+EOF
+"$BIN_DIR/citizen-launcher" autopilot enable || true
+if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true; fi
+echo "Citizen Launcher installiert. Starte ihn über das App-Menü oder: citizen-launcher gui"

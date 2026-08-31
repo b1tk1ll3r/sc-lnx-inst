@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "$0")" && pwd)"
-BACK="$ROOT/bin/omarchy-citizen-backend"
+BACK="$ROOT/bin/citizen-launcher"
 TEST="$(mktemp -d -t omarchy-citizen-updater.XXXXXX)"
 trap 'rm -rf "$TEST"' EXIT
 
@@ -59,7 +59,7 @@ git -C "$TEST/publisher" push -q
 
 git -C "$HOME/.config/omarchy/plugins/local.omarchy-citizen" remote set-url origin "$TEST/changed.git"
 set +e
-CHECK_OUTPUT="$("$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" check 2>&1)"
+CHECK_OUTPUT="$("$HOME/.local/lib/citizen-launcher/citizen-launcher" check 2>&1)"
 RC=$?
 set -e
 [[ "$RC" -ne 0 ]]
