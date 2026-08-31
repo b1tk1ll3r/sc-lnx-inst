@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.6.3 – Plug-&-Play-Installation
+# Omarchy Citizen 0.6.4 – Plug-&-Play-Installation
 
 ## Ziel
 
@@ -275,9 +275,9 @@ Damit brauchst du im ersten Supportkontakt normalerweise keine Terminalbefehle
 vom Nutzer anzufordern.
 
 
-## Hotfix 0.6.3 – Setup-Button
+## Hotfix 0.6.4 – Setup-Button
 
-Version 0.6.3 ändert die Ausführung der Panel-Aktionen grundlegend.
+Version 0.6.4 ändert die Ausführung der Panel-Aktionen grundlegend.
 
 Beim Klick auf **EINRICHTEN & STARTKLAR MACHEN** wird die Aktion nun direkt als
 Quickshell-Prozess gestartet. Das Panel zeigt sofort **WIRD GESTARTET**.
@@ -290,7 +290,7 @@ im Support-Paket.
 Nach der Installation wird der Omarchy-Shellprozess einmal neu gestartet, damit
 die neue QML-Version sicher aktiv ist.
 
-## 0.6.3 – unvollständiger Wine-Prefix
+## 0.6.4 – unvollständiger Wine-Prefix
 
 Ein Ordner wie `~/Games/star-citizen` gilt jetzt erst dann als fertiger Wine-Prefix,
 wenn mindestens `drive_c`, `system.reg` und `user.reg` existieren.

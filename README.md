@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.6.3
+# Omarchy Citizen 0.6.4
 
 A plug-and-play Star Citizen control panel for Omarchy.
 
@@ -70,7 +70,7 @@ remote; unattended updates stop if that remote changes or the checkout is dirty.
 See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DISTRIBUTION.md).
 
 
-## 0.6.3 hotfix
+## 0.6.4 hotfix
 
 - primary/setup actions now run through a Quickshell `Process` instead of fire-and-forget `bar.run`
 - the panel shows `WIRD GESTARTET` immediately after a click
@@ -78,7 +78,7 @@ See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DIS
 - terminal launch has a monitored fallback path and logs immediate launcher failures
 - installers restart the Omarchy shell after QML changes to avoid stale third-party plugin QML
 
-## 0.6.3 UI / setup hotfix
+## 0.6.4 UI / setup hotfix
 
 - fixed `undefined` in reusable status rows and chips
 - panel no longer inherits the bar's theme font; uses a neutral system sans font
@@ -86,7 +86,7 @@ See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DIS
 - setup terminal is launched directly through `xdg-terminal-exec`/UWSM with separate argv
 - failed package/AUR setup remains visible instead of the terminal disappearing immediately
 
-## 0.6.3 incomplete-prefix recovery
+## 0.6.4 incomplete-prefix recovery
 
 - a configured folder is no longer considered a valid Wine prefix merely because it exists
 - valid prefixes require `drive_c`, `system.reg`, and `user.reg`
@@ -95,3 +95,13 @@ See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DIS
 - stale LUG target config files are backed up before a clean reinstall
 - existing `Data.p4k` is never moved by Omarchy Citizen; migration is delegated to the LUG Helper
 - support bundles now include the newest `/tmp/lughelper-install-*.log` and a prefix-health report
+
+## 0.6.4 visible recovery hotfix
+
+- incomplete-prefix recovery no longer spawns a hidden second background process
+- `SETUP SICHER REPARIEREN` opens a visible terminal directly
+- the incomplete prefix is automatically renamed to a timestamped backup; it is never deleted
+- LUG reinstall output remains visible and is logged at the same time
+- if recovery fails, the terminal stays open with the error code and support instructions
+- guided setup, repair assistant, support bundle creation and NGL file selection no longer use nested `nohup` wrappers
+- updater status `blocked-dirty` is displayed as the user-friendly `lokale Änderungen · Update pausiert`

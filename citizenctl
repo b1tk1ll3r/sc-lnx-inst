@@ -2,7 +2,7 @@
 set -u
 
 PLUGIN_ID="local.omarchy-citizen"
-PLUGIN_VERSION="0.6.3"
+PLUGIN_VERSION="0.6.4"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starcitizen-lug"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -195,6 +195,21 @@ run_helper_sync() {
     bash "$helper" "$@" >>"$LOG_FILE" 2>&1
   else
     "$helper" "$@" >>"$LOG_FILE" 2>&1
+  fi
+}
+
+run_helper_visible() {
+  local helper
+  helper="$(find_helper)" || {
+    echo "Der Star Citizen LUG Helper wurde nicht gefunden." >&2
+    return 1
+  }
+
+  log_line "lug-helper visible args=$*"
+  if [[ "$helper" == *.sh ]]; then
+    bash "$helper" "$@"
+  else
+    "$helper" "$@"
   fi
 }
 
@@ -518,103 +533,113 @@ stop_prefix_wineserver() {
   fi
 }
 
-recover_incomplete_prefix_interactive() {
+recover_incomplete_prefix_terminal() {
+  set -Ee
+  exec > >(tee -a "$LOG_FILE") 2>&1
+
   local prefix stamp backup datap4k=""
 
+  recovery_failed() {
+    local rc=$?
+    trap - ERR
+    echo
+    echo "=================================================="
+    echo " REPARATUR KONNTE NICHT ABGESCHLOSSEN WERDEN"
+    echo "=================================================="
+    echo
+    echo "Fehlercode: $rc"
+    echo
+    echo "Dein vorheriger Ordner wurde nicht gelöscht."
+    echo "Im SC-Panel kannst du jetzt „Support-Paket erstellen“ wählen."
+    echo
+    log_line "recover-prefix-terminal failed rc=$rc"
+    notify "Omarchy Citizen" "Setup-Reparatur fehlgeschlagen. Bitte erstelle ein Support-Paket."
+    if [[ -t 0 ]]; then
+      read -r -p "Drücke Enter, um dieses Fenster zu schließen … " _ || true
+    else
+      sleep 10
+    fi
+    exit "$rc"
+  }
+  trap recovery_failed ERR
+
   prefix="$(find_incomplete_prefix 2>/dev/null)" || {
-    log_line "recover-prefix requested but no incomplete prefix found"
-    guided_setup_interactive
-    return
+    echo "Es wurde kein unvollständiger Wine-Prefix mehr gefunden."
+    echo "Starte stattdessen die normale Einrichtung."
+    log_line "recover-prefix-terminal no incomplete prefix found"
+    trap - ERR
+    return 0
   }
 
   datap4k="$prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen/LIVE/Data.p4k"
 
-  # If real game data is present, never move it ourselves. Let the LUG Helper's
-  # built-in reinstall/migration path handle it.
+  echo
+  echo "=================================================="
+  echo " Omarchy Citizen – Setup sicher reparieren"
+  echo "=================================================="
+  echo
+  echo "Unvollständiger Wine-Prefix:"
+  echo "  $prefix"
+  echo
+
+  # Never move real game data ourselves.
   if [[ -f "$datap4k" ]]; then
-    log_line "incomplete prefix contains Data.p4k; delegating migration to LUG Helper"
-    run_helper_sync --install || true
-    return
+    echo "Vorhandene Star-Citizen-Spieldaten wurden erkannt."
+    echo "Omarchy Citizen verschiebt diese Daten nicht selbst."
+    echo "Die Reparatur wird an den LUG Helper übergeben."
+    echo
+    log_line "recover-prefix-terminal Data.p4k present; delegate to LUG"
+    run_helper_visible --install
+    trap - ERR
+    return 0
   fi
 
   stamp="$(date '+%Y%m%d-%H%M%S')"
   backup="${prefix}-incomplete-${stamp}"
 
-  if command -v zenity >/dev/null 2>&1; then
-    if ! zenity --question \
-      --width=600 \
-      --title="Omarchy Citizen – unvollständiges Setup reparieren" \
-      --ok-label="Automatisch reparieren" \
-      --cancel-label="Abbrechen" \
-      --text="Omarchy Citizen hat einen halbfertigen Star-Citizen-Wine-Prefix erkannt:
+  echo "Der halbfertige Ordner wird NICHT gelöscht."
+  echo "Er wird gesichert als:"
+  echo "  $backup"
+  echo
+  echo "Danach wird der offizielle LUG-Installer sauber neu gestartet."
+  echo
 
-$prefix
+  log_line "recover-prefix-terminal prefix=$prefix backup=$backup"
 
-Es fehlen drive_c und/oder die Wine-Registrydateien. Fertige Star-Citizen-Spieldaten (Data.p4k) wurden nicht gefunden.
-
-Der Ordner wird NICHT gelöscht, sondern sicher umbenannt nach:
-
-$backup
-
-Danach startet der offizielle LUG-Installer sauber neu." 2>/dev/null; then
-      return 0
-    fi
-  else
-    printf '\nUnvollständiges Star-Citizen-Setup gefunden:\n%s\n\n' "$prefix"
-    printf 'Es wird gesichert als:\n%s\n\n' "$backup"
-    read -r -p "Automatisch reparieren? [j/N]: " answer
-    case "${answer,,}" in
-      j|ja|y|yes) ;;
-      *) return 0 ;;
-    esac
-  fi
-
-  log_line "recovering incomplete prefix=$prefix backup=$backup"
   stop_prefix_wineserver "$prefix"
 
-  if ! mv -- "$prefix" "$backup"; then
-    notify_error "Der unvollständige Star-Citizen-Ordner konnte nicht gesichert werden.
-
-Bitte erstelle ein Support-Paket."
-    return 1
-  fi
-
+  mv -- "$prefix" "$backup"
   backup_lug_target_configs "$stamp"
 
-  notify "Omarchy Citizen" "Unvollständiges Setup wurde gesichert. Der LUG-Installer startet jetzt neu."
-  run_helper_sync --install || {
-    log_line "fresh LUG install after incomplete-prefix recovery failed"
-    if command -v zenity >/dev/null 2>&1; then
-      if zenity --question \
-        --width=560 \
-        --title="Star-Citizen-Setup fehlgeschlagen" \
-        --ok-label="Support-Paket erstellen" \
-        --cancel-label="Später" \
-        --text="Auch der saubere Neuversuch konnte den Wine-Prefix nicht vollständig erstellen.
+  echo "✓ Backup erstellt."
+  echo
+  echo "Starte frische LUG-Einrichtung …"
+  echo
 
-Deine vorherige Installation wurde nicht gelöscht; sie liegt als Backup vor.
+  run_helper_visible --install
 
-Soll Omarchy Citizen jetzt direkt ein Support-Paket erstellen?" 2>/dev/null; then
-        "$SELF" support-build
-      fi
-    fi
-    return 1
-  }
-
+  echo
+  echo "Prüfe den neu angelegten Wine-Prefix …"
   if read_prefix >/dev/null 2>&1; then
-    notify "Omarchy Citizen" "Wine-Prefix wurde erfolgreich erstellt."
-    log_line "incomplete-prefix recovery succeeded"
-  else
-    log_line "LUG install returned but prefix still incomplete"
-    notify_error "Der LUG-Installer wurde beendet, aber der Wine-Prefix ist weiterhin unvollständig.
-
-Bitte erstelle ein Support-Paket."
-    return 1
+    echo "✓ Wine-Prefix ist vollständig initialisiert."
+    log_line "recover-prefix-terminal succeeded"
+    trap - ERR
+    notify "Omarchy Citizen" "Wine-Prefix wurde erfolgreich neu erstellt."
+    echo
+    echo "Reparatur abgeschlossen. Du kannst dieses Fenster schließen."
+    return 0
   fi
+
+  echo
+  echo "Der LUG-Installer wurde beendet, aber drive_c/system.reg/user.reg"
+  echo "sind weiterhin nicht vollständig vorhanden."
+  echo
+  log_line "recover-prefix-terminal LUG returned but prefix still incomplete"
+  return 1
 }
 
 recover_incomplete_prefix() {
-  nohup bash "$SELF" recover-prefix-interactive >>"$LOG_FILE" 2>&1 &
+  launch_terminal_action recover-prefix-terminal
 }
 
 guided_setup_interactive() {
@@ -626,8 +651,8 @@ guided_setup_interactive() {
   fi
 
   if find_incomplete_prefix >/dev/null 2>&1; then
-    log_line "guided setup found incomplete prefix; switching to recovery"
-    recover_incomplete_prefix_interactive
+    log_line "guided setup found incomplete prefix; opening visible recovery terminal"
+    launch_terminal_action recover-prefix-terminal
     return $?
   fi
 
@@ -657,7 +682,7 @@ guided_setup() {
     launch_terminal_action install-stack-terminal
     return
   fi
-  nohup bash "$SELF" guided-setup-interactive >>"$LOG_FILE" 2>&1 &
+  guided_setup_interactive
 }
 
 install_stack_terminal() {
@@ -722,9 +747,11 @@ install_stack_terminal() {
   if find_incomplete_prefix >/dev/null 2>&1; then
     echo
     echo "Eine frühere, unvollständige Wine-Prefix-Erstellung wurde erkannt."
-    echo "Die Reparatur wird jetzt grafisch fortgesetzt."
+    echo "Öffne die sichere Reparatur in einem eigenen Fenster."
     echo
-    recover_incomplete_prefix_interactive
+    trap - ERR
+    launch_terminal_action recover-prefix-terminal
+    return 0
   elif ! read_prefix >/dev/null 2>&1; then
     run_helper_sync --install || true
   fi
@@ -824,7 +851,7 @@ repair_assistant_interactive() {
       return
       ;;
     recover-prefix)
-      recover_incomplete_prefix_interactive
+      launch_terminal_action recover-prefix-terminal
       return
       ;;
     install)
@@ -896,7 +923,7 @@ repair_assistant_interactive() {
 }
 
 repair_assistant() {
-  nohup bash "$SELF" repair-interactive >>"$LOG_FILE" 2>&1 &
+  repair_assistant_interactive
 }
 
 sanitize_to() {
@@ -1131,7 +1158,7 @@ Schicke dieses Archiv zusammen mit der Support-ID an den Plugin-Support." \
 }
 
 support_start() {
-  nohup bash "$SELF" support-build >>"$LOG_FILE" 2>&1 &
+  support_build
 }
 
 open_debug_log() {
@@ -1260,7 +1287,7 @@ Fortfahren?" 2>/dev/null; then
 }
 
 ngl_install() {
-  nohup bash "$SELF" ngl-install-interactive >>"$LOG_FILE" 2>&1 &
+  ngl_install_interactive
 }
 
 case "$ACTION" in
@@ -1268,7 +1295,7 @@ case "$ACTION" in
   primary)                  primary_action ;;
   setup)                    guided_setup ;;
   recover-prefix)           recover_incomplete_prefix ;;
-  recover-prefix-interactive) recover_incomplete_prefix_interactive ;;
+  recover-prefix-terminal)   recover_incomplete_prefix_terminal ;;
   guided-setup-interactive) guided_setup_interactive ;;
   repair)                   repair_assistant ;;
   repair-interactive)       repair_assistant_interactive ;;

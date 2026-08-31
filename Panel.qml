@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.6.3"
+  property string pluginVersion: "0.6.4"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -97,7 +97,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.6.3"
+    pluginVersion = values.plugin_version || "0.6.4"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -122,6 +122,7 @@ Panel {
   function stateIcon(state) {
     if (state === "ready" || state === "current") return "✓"
     if (state === "available") return "↑"
+    if (state === "warning") return "!"
     if (state === "partial" || state === "unknown") return "…"
     if (state === "checking") return "·"
     return "!"
@@ -129,9 +130,26 @@ Panel {
 
   function stateColor(state) {
     if (state === "ready" || state === "current") return success
-    if (state === "available") return warning
+    if (state === "available" || state === "warning") return warning
     if (state === "partial" || state === "unknown" || state === "checking") return accent
     return danger
+  }
+
+  function pluginUpdateText() {
+    if (root.pluginUpdate === "available") return "Update verfügbar"
+    if (root.pluginUpdate === "current") return "aktuell"
+    if (root.pluginUpdate === "blocked-dirty") return "lokale Änderungen · Update pausiert"
+    if (root.pluginUpdate === "blocked-diverged") return "Git-Stand abweichend · Update pausiert"
+    if (root.pluginUpdate === "blocked-remote") return "Updatequelle geändert · Update pausiert"
+    if (root.pluginUpdate === "zip") return "ZIP-Installation"
+    return root.pluginUpdate
+  }
+
+  function pluginUpdateState() {
+    if (root.pluginUpdate === "available") return "available"
+    if (root.pluginUpdate === "current") return "current"
+    if (String(root.pluginUpdate).indexOf("blocked-") === 0) return "warning"
+    return "unknown"
   }
 
   function healthColor() {
@@ -219,17 +237,22 @@ Panel {
     }
 
     onStarted: {
-      root.actionStatus = root.actionKind === "primary"
-        ? "Setup/Start wird vorbereitet…"
-        : "Aktion wird ausgeführt…"
+      if (root.actionKind === "primary" && root.health === "recover-prefix")
+        root.actionStatus = "Reparatur-Fenster wird geöffnet…"
+      else if (root.actionKind === "primary")
+        root.actionStatus = "Setup/Start wird vorbereitet…"
+      else
+        root.actionStatus = "Aktion wird ausgeführt…"
     }
 
     onExited: function(exitCode) {
       if (exitCode === 0) {
         root.actionError = ""
-        root.actionStatus = root.actionKind === "primary" && root.health !== "ready"
-          ? "Setup-Fenster wurde geöffnet. Folge dort einfach den angezeigten Schritten."
-          : "Aktion wurde gestartet."
+        root.actionStatus = root.actionKind === "primary" && root.health === "recover-prefix"
+          ? "Reparatur-Fenster wurde geöffnet. Dort läuft die sichere Wiederherstellung."
+          : (root.actionKind === "primary" && root.health !== "ready"
+              ? "Setup-Fenster wurde geöffnet. Folge dort einfach den angezeigten Schritten."
+              : "Aktion wurde gestartet.")
         root.refreshStatus()
 
         if (root.actionCloseOnSuccess)
@@ -594,11 +617,8 @@ Panel {
 
             StatusLine {
               label: "Plugin-Stand"
-              state: root.pluginUpdate === "available" ? "available" :
-                (root.pluginUpdate === "current" ? "current" : "unknown")
-              value: root.pluginUpdate === "available"
-                ? "Update verfügbar"
-                : (root.pluginUpdate === "current" ? "aktuell" : root.pluginUpdate)
+              state: root.pluginUpdateState()
+              value: root.pluginUpdateText()
             }
 
             Grid {

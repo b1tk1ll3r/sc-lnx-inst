@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "author": "Community prototype",
   "license": "MIT",
-  "description": "Plug-and-play Star Citizen controls for Omarchy. 0.6.3 detects and safely recovers incomplete Wine prefixes and improves LUG install diagnostics.",
+  "description": "Plug-and-play Star Citizen controls for Omarchy. 0.6.4 removes nested background UI actions and performs incomplete-prefix recovery in a visible, logged terminal.",
   "kinds": [
     "bar-widget"
   ],
