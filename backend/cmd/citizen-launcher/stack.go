@@ -33,6 +33,8 @@ const (
 // fail under otherwise healthy Wine prefixes.
 var basePrefixWinetricksVerbs = []string{"arial", "tahoma", "win11"}
 
+const wineFileAssociationsKey = "HKEY_CURRENT_USER\\Software\\Wine\\FileOpenAssociations"
+
 type GameConfig struct {
 	Prefix            string `json:"prefix"`
 	GameDir           string `json:"game_dir"`
@@ -697,11 +699,14 @@ func (a *App) ensurePrefixComponents(gc GameConfig) error {
 
 	runner, _ := a.currentRunner()
 	wine := filepath.Join(runner, "bin", "wine")
-	reg := exec.Command(wine, "reg", "add", `HKEY_CURRENT_USER\\Software\\Wine\\FileOpenAssociations`, `/v`, `Enable`, `/d`, `N`, `/f`)
+	// This is a convenience tweak only: prevent Wine from creating host file
+	// associations. It must never make the Star Citizen installation fail.
+	// Use a normal Go string so Wine receives single registry separators.
+	reg := exec.Command(wine, "reg", "add", wineFileAssociationsKey, "/v", "Enable", "/t", "REG_SZ", "/d", "N", "/f")
 	reg.Env = env
-	out, err := reg.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("Wine Registry: %s", formatCommandFailure(err, out))
+	out, regErr := reg.CombinedOutput()
+	if regErr != nil {
+		a.logf("non-fatal Wine registry association tweak warning: %s", formatCommandFailure(regErr, out))
 	}
 	_ = writeMeta(filepath.Join(a.vendorDir, "winetricks", "meta.json"), componentMeta{Version: tag, Updated: time.Now().Format(time.RFC3339)})
 	return nil

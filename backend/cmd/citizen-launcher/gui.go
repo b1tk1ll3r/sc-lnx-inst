@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -21,10 +22,13 @@ import (
 var guiFiles embed.FS
 
 type GUIStatus struct {
-	Version  string         `json:"version"`
-	Platform PlatformStatus `json:"platform"`
-	Game     GameStatus     `json:"game"`
-	Launcher Status         `json:"launcher"`
+	Version           string         `json:"version"`
+	InstalledVersion  string         `json:"installed_version,omitempty"`
+	RestartRequired   bool           `json:"restart_required"`
+	PackageAutoUpdate bool           `json:"package_auto_update"`
+	Platform          PlatformStatus `json:"platform"`
+	Game              GameStatus     `json:"game"`
+	Launcher          Status         `json:"launcher"`
 }
 
 type GUIJob struct {
@@ -100,7 +104,11 @@ func (a *App) runGUI(args []string) error {
 	}
 	mux.HandleFunc(base+"/api/status", func(w http.ResponseWriter, r *http.Request) {
 		st, _ := a.status(false)
-		jsonOut(w, GUIStatus{Version: appVersion, Platform: detectPlatform(), Game: a.gameStatus(), Launcher: st})
+		su, _ := a.selfUpdateStatus(false)
+		jsonOut(w, GUIStatus{
+			Version: appVersion, InstalledVersion: su.Installed, RestartRequired: su.RestartNeeded,
+			PackageAutoUpdate: packageAutoUpdateActive(), Platform: detectPlatform(), Game: a.gameStatus(), Launcher: st,
+		})
 	})
 	mux.HandleFunc(base+"/api/job/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, base+"/api/job/")
@@ -119,6 +127,25 @@ func (a *App) runGUI(args []string) error {
 			return
 		}
 		action := strings.TrimPrefix(r.URL.Path, base+"/api/action/")
+		if action == "restart" {
+			target := a.selfPath
+			if installedPackageVersion() != "" {
+				if _, err := os.Stat("/usr/bin/citizen-launcher"); err == nil {
+					target = "/usr/bin/citizen-launcher"
+				}
+			}
+			if target == "" {
+				http.Error(w, "launcher executable not found", 500)
+				return
+			}
+			if err := exec.Command(target, "gui").Start(); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			jsonOut(w, map[string]string{"state": "restarting"})
+			go func() { time.Sleep(450 * time.Millisecond); os.Exit(0) }()
+			return
+		}
 		if action == "launch" {
 			if err := a.gameLaunch(); err != nil {
 				http.Error(w, err.Error(), 500)

@@ -1,4 +1,4 @@
-# Citizen Launcher 0.9.1
+# Citizen Launcher 0.9.2
 
 Citizen Launcher is the distro-neutral successor to Omarchy Citizen.
 
@@ -81,10 +81,27 @@ For Omarchy plus bar integration:
 Citizen Launcher manages its Wine/DXVK/RSI stack entirely as the current user. It does not create passwordless sudo/pacman/apt rules. GPU/kernel/base-system updates remain owned by the distribution.
 
 
-## 0.9.1 fixes
+## 0.9.2 fixes
 
 - PowerShell is no longer a mandatory prefix component.
 - RSI `latest.yml` parser accepts Electron Builder `path:` and nested `files: - url:` formats.
 - Repair also refreshes DXVK.
 - Responsive dashboard prevents long GPU/distribution names from overflowing.
 - GUI shows concise user-facing errors with expandable technical details.
+
+## Automatic Citizen Launcher updates
+
+Starting with 0.9.2 the launcher itself is part of Autopilot.
+
+### Debian / Ubuntu / Mint
+
+Installing the `.deb` once enables `citizen-launcher-self-update.timer`. Future
+Citizen Launcher releases are checked automatically every six hours. A new `.deb`
+is only installed after its GitHub SHA-256 asset digest and Debian package metadata
+have been verified.
+
+The currently running GUI is never killed during package replacement. If an update
+landed while the GUI was open, the app shows **Neue Version installiert** and offers
+a controlled restart into the new binary.
+
+See `packaging/SELF_UPDATE.md` for details.

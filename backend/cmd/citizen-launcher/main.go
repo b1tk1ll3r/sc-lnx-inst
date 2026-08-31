@@ -15,10 +15,14 @@ import (
 	"time"
 )
 
+var (
+	appVersion  = "0.9.2"
+	releaseRepo = "sendnwv/omarchy-sc"
+)
+
 const (
-	appVersion = "0.9.1"
-	pluginID   = "local.omarchy-citizen"
-	appID      = "io.github.citizenlauncher.CitizenLauncher"
+	pluginID = "local.omarchy-citizen"
+	appID    = "io.github.citizenlauncher.CitizenLauncher"
 )
 
 type Config struct {
@@ -107,6 +111,35 @@ func main() {
 		if err := app.update(false); err != nil {
 			app.logf("manual update failed: %v", err)
 			fatal(err)
+		}
+	case "self-update":
+		if len(args) < 2 {
+			args = append(args, "check")
+		}
+		switch args[1] {
+		case "check":
+			st, err := app.selfUpdateStatus(true)
+			if hasArg(args[2:], "--json") {
+				printJSON(st)
+			} else {
+				printSelfUpdateKV(st)
+			}
+			if err != nil {
+				fatal(err)
+			}
+		case "status":
+			st, _ := app.selfUpdateStatus(false)
+			if hasArg(args[2:], "--json") {
+				printJSON(st)
+			} else {
+				printSelfUpdateKV(st)
+			}
+		case "apply":
+			if err := app.applySelfUpdate(hasArg(args[2:], "--system"), hasArg(args[2:], "--quiet")); err != nil {
+				fatal(err)
+			}
+		default:
+			fatal(errors.New("usage: self-update check|status|apply [--system] [--quiet]"))
 		}
 	case "tick":
 		if err := app.tick(); err != nil {
@@ -363,6 +396,15 @@ func (a *App) tick() error {
 	if cfg.AutoMaintain {
 		if err := a.maintainGamingStack(); err != nil {
 			problems = append(problems, "gaming stack: "+err.Error())
+		}
+		// Generic ~/.local installations can update atomically in the user account.
+		// Debian packages are updated by the root system timer installed by the .deb.
+		if su, err := a.selfUpdateStatus(true); err != nil {
+			a.logf("launcher release check warning: %v", err)
+		} else if su.State == "available" && su.Mode == "user" {
+			if err := a.applySelfUpdate(false, true); err != nil {
+				problems = append(problems, "launcher update: "+err.Error())
+			}
 		}
 	}
 

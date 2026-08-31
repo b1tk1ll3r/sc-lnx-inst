@@ -56,3 +56,12 @@ func TestBasePrefixDoesNotRequirePowerShell(t *testing.T) {
 		}
 	}
 }
+
+func TestWineRegistryKeyUsesSingleSeparators(t *testing.T) {
+	if strings.Contains(wineFileAssociationsKey, `\\`) {
+		t.Fatalf("registry key contains doubled separators: %q", wineFileAssociationsKey)
+	}
+	if wineFileAssociationsKey != `HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations` {
+		t.Fatalf("unexpected registry key: %q", wineFileAssociationsKey)
+	}
+}

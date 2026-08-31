@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Citizen Launcher package updates automatically
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+RandomizedDelaySec=20min
+Persistent=true
+Unit=citizen-launcher-self-update.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Citizen Launcher automatic package update
+Documentation=https://github.com/sendnwv/omarchy-sc
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/bin/citizen-launcher
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/citizen-launcher self-update apply --system --quiet
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+UMask=0022
