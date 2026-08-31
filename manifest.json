@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "local.omarchy-citizen",
+  "name": "Omarchy Citizen",
+  "version": "0.6.0",
+  "author": "Community prototype",
+  "license": "MIT",
+  "description": "Plug-and-play Star Citizen controls for Omarchy with guided repair, support bundles and a Go-based automatic plugin update backend.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy Citizen",
+    "category": "Gaming",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
