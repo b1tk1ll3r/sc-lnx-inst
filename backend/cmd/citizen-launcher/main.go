@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	appVersion = "0.9.0"
+	appVersion = "0.9.1"
 	pluginID   = "local.omarchy-citizen"
 	appID      = "io.github.citizenlauncher.CitizenLauncher"
 )

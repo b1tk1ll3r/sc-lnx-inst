@@ -42,6 +42,30 @@ type jobStore struct {
 	jobs map[string]*GUIJob
 }
 
+func friendlyActionError(action string, err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "Windows-Komponente"):
+		return "Eine Windows-Komponente konnte nicht eingerichtet werden. Der technische Fehler ist unten verfügbar."
+	case strings.Contains(s, "RSI latest.yml") || strings.Contains(s, "RSI Installer"):
+		return "Die aktuelle RSI-Launcher-Version konnte nicht zuverlässig ermittelt werden."
+	case strings.Contains(s, "RSI Launcher Installation"):
+		return "Der RSI Launcher konnte nicht installiert oder aktualisiert werden."
+	case strings.Contains(strings.ToLower(s), "vulkan"):
+		return "Vulkan ist auf diesem System nicht spielbereit."
+	case strings.Contains(strings.ToLower(s), "wine"):
+		return "Der Wine-Stack konnte den Selbsttest oder die Reparatur nicht abschließen."
+	default:
+		if action == "repair" {
+			return "Die automatische Reparatur konnte nicht vollständig abgeschlossen werden."
+		}
+		return "Die Aktion konnte nicht vollständig abgeschlossen werden."
+	}
+}
+
 func (a *App) runGUI(args []string) error {
 	noOpen := hasArg(args, "--no-open")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -143,6 +167,7 @@ func (a *App) runGUI(args []string) error {
 			j.Finished = time.Now().Format(time.RFC3339)
 			if err != nil {
 				j.State = "error"
+				j.Message = friendlyActionError(action, err)
 				j.Error = err.Error()
 			} else {
 				j.State = "done"

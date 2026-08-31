@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="0.9.0"; ARCH="amd64"; WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+VERSION="0.9.1"; ARCH="amd64"; WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/citizen-launcher_${VERSION}_${ARCH}"
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/share/applications"
 install -m755 "$ROOT/backend/bin/citizen-launcher" "$PKG/usr/bin/citizen-launcher"

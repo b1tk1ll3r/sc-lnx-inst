@@ -1,4 +1,4 @@
-# Citizen Launcher 0.9.0
+# Citizen Launcher 0.9.1
 
 Citizen Launcher is the distro-neutral successor to Omarchy Citizen.
 
@@ -79,3 +79,12 @@ For Omarchy plus bar integration:
 ## Security boundaries
 
 Citizen Launcher manages its Wine/DXVK/RSI stack entirely as the current user. It does not create passwordless sudo/pacman/apt rules. GPU/kernel/base-system updates remain owned by the distribution.
+
+
+## 0.9.1 fixes
+
+- PowerShell is no longer a mandatory prefix component.
+- RSI `latest.yml` parser accepts Electron Builder `path:` and nested `files: - url:` formats.
+- Repair also refreshes DXVK.
+- Responsive dashboard prevents long GPU/distribution names from overflowing.
+- GUI shows concise user-facing errors with expandable technical details.

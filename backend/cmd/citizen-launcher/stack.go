@@ -27,6 +27,12 @@ const (
 	rsiLatestYML   = rsiBaseURL + "/latest.yml"
 )
 
+// Keep the mandatory prefix small and boring. PowerShell is deliberately not
+// a base dependency: current LUG documentation exposes it as a separate
+// maintenance/troubleshooting action, and PowerShell Core MSI installation can
+// fail under otherwise healthy Wine prefixes.
+var basePrefixWinetricksVerbs = []string{"arial", "tahoma", "win11"}
+
 type GameConfig struct {
 	Prefix            string `json:"prefix"`
 	GameDir           string `json:"game_dir"`
@@ -427,6 +433,78 @@ func (a *App) syncWinetricks() (string, string, error) {
 	return target, tag, nil
 }
 
+func parseRSILatestYML(b []byte) (string, string, error) {
+	var version, topPath, topSHA, firstURL, firstURLSHA string
+	urlIndent := -1
+	scanner := bufio.NewScanner(strings.NewReader(string(b)))
+	for scanner.Scan() {
+		raw := strings.TrimRight(scanner.Text(), "\r\n")
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		norm := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+		key, value, ok := strings.Cut(norm, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = yamlScalar(value)
+		switch key {
+		case "version":
+			if version == "" {
+				version = value
+			}
+		case "path":
+			if indent == 0 && topPath == "" {
+				topPath = value
+			}
+		case "url":
+			if firstURL == "" {
+				firstURL = value
+				urlIndent = indent
+			}
+		case "sha512":
+			if indent == 0 && topSHA == "" {
+				topSHA = value
+			} else if firstURL != "" && firstURLSHA == "" && indent > urlIndent {
+				firstURLSHA = value
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", "", err
+	}
+	file := topPath
+	sha := topSHA
+	if file == "" {
+		file = firstURL
+		if sha == "" {
+			sha = firstURLSHA
+		}
+	}
+	// Electron-builder normally supplies path/url, but the version fallback
+	// keeps us resilient if CIG trims redundant fields from latest.yml.
+	if file == "" && version != "" {
+		file = "RSI Launcher-Setup-" + version + ".exe"
+	}
+	if file == "" {
+		return "", "", errors.New("RSI latest.yml enthält weder path, url noch version")
+	}
+	return file, sha, nil
+}
+
+func yamlScalar(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 {
+		if (v[0] == '\'' && v[len(v)-1] == '\'') || (v[0] == '"' && v[len(v)-1] == '"') {
+			v = v[1 : len(v)-1]
+		}
+	}
+	return strings.TrimSpace(v)
+}
+
 func (a *App) latestRSIInstaller() (string, string, string, error) {
 	req, _ := http.NewRequest("GET", rsiLatestYML, nil)
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
@@ -443,22 +521,19 @@ func (a *App) latestRSIInstaller() (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	reURL := regexp.MustCompile(`(?m)^url:\s*(.+?)\s*$`)
-	m := reURL.FindSubmatch(b)
-	if len(m) < 2 {
-		return "", "", "", errors.New("RSI latest.yml Format unbekannt")
+	file, sha, err := parseRSILatestYML(b)
+	if err != nil {
+		return "", "", "", err
 	}
-	file := strings.TrimSpace(string(m[1]))
-	file = strings.Trim(file, "\"'")
-	sha := ""
-	reSHA := regexp.MustCompile(`(?m)^sha512:\s*(.+?)\s*$`)
-	if sm := reSHA.FindSubmatch(b); len(sm) >= 2 {
-		sha = strings.TrimSpace(string(sm[1]))
-		sha = strings.Trim(sha, "\"'")
+	ref, err := neturl.Parse(file)
+	if err != nil {
+		return "", "", "", fmt.Errorf("RSI Installer-Pfad ungültig: %w", err)
+	}
+	if ref.IsAbs() {
+		return filepath.Base(ref.Path), ref.String(), sha, nil
 	}
 	base, _ := neturl.Parse(rsiBaseURL + "/")
-	ref := &neturl.URL{Path: file}
-	return file, base.ResolveReference(ref).String(), sha, nil
+	return filepath.Base(ref.Path), base.ResolveReference(ref).String(), sha, nil
 }
 
 func verifySHA512Base64(path, want string) error {
@@ -609,18 +684,22 @@ func (a *App) ensurePrefixComponents(gc GameConfig) error {
 	cache := filepath.Join(a.cacheDir, "winetricks-cache", tag)
 	_ = os.MkdirAll(cache, 0o755)
 	env = append(env, "W_CACHE="+cache, "WINETRICKS_DOWNLOADER=curl")
-	cmd := exec.Command(wt, "-q", "arial", "tahoma", "powershell", "win11")
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	a.logf("winetricks %s output=%s", tag, compactDiagnostic(string(out)))
-	if err != nil {
-		return fmt.Errorf("Prefix-Komponenten: %s", formatCommandFailure(err, out))
+
+	for _, verb := range basePrefixWinetricksVerbs {
+		cmd := exec.Command(wt, "-q", verb)
+		cmd.Env = env
+		out, runErr := cmd.CombinedOutput()
+		a.logf("winetricks %s verb=%s output=%s", tag, verb, compactDiagnostic(string(out)))
+		if runErr != nil {
+			return fmt.Errorf("Windows-Komponente %s: %s", verb, formatCommandFailure(runErr, out))
+		}
 	}
+
 	runner, _ := a.currentRunner()
 	wine := filepath.Join(runner, "bin", "wine")
-	reg := exec.Command(wine, "reg", "add", `HKEY_CURRENT_USER\Software\Wine\FileOpenAssociations`, `/v`, `Enable`, `/d`, `N`, `/f`)
+	reg := exec.Command(wine, "reg", "add", `HKEY_CURRENT_USER\\Software\\Wine\\FileOpenAssociations`, `/v`, `Enable`, `/d`, `N`, `/f`)
 	reg.Env = env
-	out, err = reg.CombinedOutput()
+	out, err := reg.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Wine Registry: %s", formatCommandFailure(err, out))
 	}
@@ -788,9 +867,6 @@ func (a *App) gameRepair() error {
 	if hs.State == "blocked" {
 		return errors.New(hs.Reason)
 	}
-	if err := a.syncLUGHelper(); err != nil {
-		a.logf("LUG runtime warning: %v", err)
-	}
 	if err := a.syncWineRunner(); err != nil {
 		return err
 	}
@@ -802,6 +878,9 @@ func (a *App) gameRepair() error {
 	}
 	if err := a.ensureRSILauncher(gc, false); err != nil {
 		return err
+	}
+	if err := a.syncDXVK(); err != nil {
+		return fmt.Errorf("DXVK: %w", err)
 	}
 	if err := a.writeOwnedLaunchFiles(gc); err != nil {
 		return err
