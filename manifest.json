@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "author": "Community prototype",
   "license": "MIT",
-  "description": "Plug-and-play Star Citizen controls for Omarchy with reliable in-panel action execution, guided setup/repair, debug support bundles, update backend and optional NGL.",
+  "description": "Plug-and-play Star Citizen controls for Omarchy. 0.6.2 fixes status rendering and makes first-time setup visibly reliable.",
   "kinds": [
     "bar-widget"
   ],

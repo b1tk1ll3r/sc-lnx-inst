@@ -2,7 +2,7 @@
 set -u
 
 PLUGIN_ID="local.omarchy-citizen"
-PLUGIN_VERSION="0.6.1"
+PLUGIN_VERSION="0.6.2"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starcitizen-lug"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -388,9 +388,7 @@ probe_detached_start() {
   "$@" >>"$LOG_FILE" 2>&1 &
   local pid=$!
 
-  # Give immediate launcher errors a chance to surface. A successful terminal
-  # launcher may either stay alive or exit 0 after handing the terminal off.
-  sleep 0.35
+  sleep 0.45
 
   if ! kill -0 "$pid" 2>/dev/null; then
     local rc=0
@@ -409,37 +407,44 @@ probe_detached_start() {
 
 launch_terminal_action() {
   local action="$1"
-  local cmd
+  log_line "launch-terminal action=$action"
 
-  printf -v cmd 'bash %q %q' "$SELF" "$action"
-  log_line "launch-terminal action=$action cmd=$cmd"
+  # Prefer direct argv-safe terminal launching. This avoids the presentation
+  # wrapper joining arguments into one shell command string.
+  if command -v uwsm-app >/dev/null 2>&1 && command -v xdg-terminal-exec >/dev/null 2>&1; then
+    if probe_detached_start "uwsm-xdg-terminal" \
+      setsid uwsm-app -- xdg-terminal-exec \
+        --app-id=org.omarchy.terminal \
+        --title="Omarchy Citizen Setup" \
+        -e bash "$SELF" "$action"; then
+      printf 'terminal=opened\n'
+      return 0
+    fi
+  fi
 
+  if command -v xdg-terminal-exec >/dev/null 2>&1; then
+    if probe_detached_start "xdg-terminal" \
+      xdg-terminal-exec \
+        --title="Omarchy Citizen Setup" \
+        -e bash "$SELF" "$action"; then
+      printf 'terminal=opened\n'
+      return 0
+    fi
+  fi
+
+  # Final compatibility fallback for older/current Omarchy installations.
   if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
     if probe_detached_start "omarchy-floating-terminal" \
       omarchy-launch-floating-terminal-with-presentation bash "$SELF" "$action"; then
-      return 0
-    fi
-    log_line "primary floating terminal launcher failed; trying direct terminal fallback"
-  fi
-
-  if command -v uwsm-app >/dev/null 2>&1 && command -v xdg-terminal-exec >/dev/null 2>&1; then
-    if probe_detached_start "direct-omarchy-terminal" \
-      setsid uwsm-app -- xdg-terminal-exec \
-        --app-id=org.omarchy.terminal \
-        --title="Omarchy Citizen" \
-        -e bash -c "$cmd"; then
-      return 0
-    fi
-  elif command -v xdg-terminal-exec >/dev/null 2>&1; then
-    if probe_detached_start "xdg-terminal" \
-      xdg-terminal-exec -e bash "$SELF" "$action"; then
+      printf 'terminal=opened\n'
       return 0
     fi
   fi
 
+  echo "Das Setup-Terminal konnte nicht geöffnet werden." >&2
   notify_error "Das Setup-Terminal konnte nicht geöffnet werden.
 
-Bitte erstelle im SC-Panel ein Support-Paket. Darin ist jetzt auch der fehlgeschlagene Startversuch protokolliert."
+Bitte klicke auf „Support-Paket erstellen“. Der fehlgeschlagene Startversuch ist dort protokolliert."
   return 1
 }
 
@@ -481,8 +486,31 @@ guided_setup() {
 }
 
 install_stack_terminal() {
-  set -e
+  set -Ee
   exec > >(tee -a "$LOG_FILE") 2>&1
+
+  setup_failed() {
+    local rc=$?
+    trap - ERR
+    echo
+    echo "=================================================="
+    echo " SETUP KONNTE NICHT ABGESCHLOSSEN WERDEN"
+    echo "=================================================="
+    echo
+    echo "Fehlercode: $rc"
+    echo "Keine Sorge: Im SC-Panel kannst du anschließend"
+    echo "„Support-Paket erstellen“ wählen."
+    echo
+    log_line "install-stack failed rc=$rc"
+    notify "Omarchy Citizen" "Setup fehlgeschlagen. Bitte erstelle im SC-Panel ein Support-Paket."
+    if [[ -t 0 ]]; then
+      read -r -p "Drücke Enter, um dieses Fenster zu schließen … " _ || true
+    else
+      sleep 8
+    fi
+    exit "$rc"
+  }
+  trap setup_failed ERR
 
   echo
   echo "=================================================="
@@ -523,6 +551,7 @@ install_stack_terminal() {
   echo
   echo "Plug-&-Play-Setup beendet."
   echo "Du kannst dieses Fenster schließen und ✦SC öffnen."
+  trap - ERR
   notify "Omarchy Citizen" "Grundsetup abgeschlossen. Öffne ✦SC und starte Star Citizen."
   log_line "install-stack complete"
 }

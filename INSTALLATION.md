@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.6.1 – Plug-&-Play-Installation
+# Omarchy Citizen 0.6.2 – Plug-&-Play-Installation
 
 ## Ziel
 
@@ -275,9 +275,9 @@ Damit brauchst du im ersten Supportkontakt normalerweise keine Terminalbefehle
 vom Nutzer anzufordern.
 
 
-## Hotfix 0.6.1 – Setup-Button
+## Hotfix 0.6.2 – Setup-Button
 
-Version 0.6.1 ändert die Ausführung der Panel-Aktionen grundlegend.
+Version 0.6.2 ändert die Ausführung der Panel-Aktionen grundlegend.
 
 Beim Klick auf **EINRICHTEN & STARTKLAR MACHEN** wird die Aktion nun direkt als
 Quickshell-Prozess gestartet. Das Panel zeigt sofort **WIRD GESTARTET**.

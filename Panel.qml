@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.6.1"
+  property string pluginVersion: "0.6.2"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -47,6 +47,7 @@ Panel {
   readonly property color warning: "#ffd276"
   readonly property color danger: "#ff8fa1"
   readonly property color muted: "#a8bbc9"
+  readonly property string uiFont: "sans-serif"
 
   readonly property string controlScript: decodeURIComponent(
     Qt.resolvedUrl("citizenctl").toString().replace(/^file:\/\//, "")
@@ -95,7 +96,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.6.1"
+    pluginVersion = values.plugin_version || "0.6.2"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -220,7 +221,9 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode === 0) {
         root.actionError = ""
-        root.actionStatus = "Gestartet."
+        root.actionStatus = root.actionKind === "primary" && root.health !== "ready"
+          ? "Setup-Fenster wurde geöffnet. Folge dort einfach den angezeigten Schritten."
+          : "Aktion wurde gestartet."
         root.refreshStatus()
 
         if (root.actionCloseOnSuccess)
@@ -302,7 +305,7 @@ Panel {
                   anchors.centerIn: parent
                   text: "✦"
                   color: root.healthColor()
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.family: root.uiFont
                   font.pixelSize: Style.font.title
                   font.bold: true
                 }
@@ -314,7 +317,7 @@ Panel {
                 Text {
                   text: "OMARCHY CITIZEN"
                   color: root.barForeground
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.family: root.uiFont
                   font.pixelSize: Style.font.title
                   font.bold: true
                 }
@@ -322,7 +325,7 @@ Panel {
                 Text {
                   text: root.headline()
                   color: root.healthColor()
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.family: root.uiFont
                   font.pixelSize: Style.font.bodySmall
                   font.bold: true
                 }
@@ -333,7 +336,7 @@ Panel {
               width: parent.width
               text: root.subline()
               color: root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
             }
@@ -344,10 +347,13 @@ Panel {
                 ? "…  WIRD GESTARTET"
                 : root.primaryText()
               foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+              fontFamily: root.uiFont
               bordered: true
               active: root.health === "ready" || actionProc.running
-              onClicked: root.runAction(root.health === "repair" ? "repair" : "primary")
+              onClicked: root.runAction(
+                root.health === "repair" ? "repair" : "primary",
+                root.health === "ready"
+              )
             }
 
             Text {
@@ -355,7 +361,7 @@ Panel {
               width: parent.width
               text: root.actionStatus
               color: root.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
@@ -377,7 +383,7 @@ Panel {
                 anchors.margins: Style.space(8)
                 text: root.actionError
                 color: root.danger
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.family: root.uiFont
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
               }
@@ -404,7 +410,7 @@ Panel {
             Text {
               text: "HILFE OHNE LINUX-WISSEN"
               color: root.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.bold: true
             }
@@ -421,7 +427,7 @@ Panel {
                 width: helpGrid.cellWidth
                 text: "↻  Problem beheben"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("repair")
               }
@@ -430,7 +436,7 @@ Panel {
                 width: helpGrid.cellWidth
                 text: "▣  Support-Paket erstellen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("support")
               }
@@ -440,7 +446,7 @@ Panel {
               width: parent.width
               text: "Das Support-Paket sammelt Diagnoseinformationen automatisch und maskiert typische persönliche Daten vor dem Export."
               color: root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
@@ -469,13 +475,13 @@ Panel {
 
               StatusChip {
                 label: "LUG"
-                value: root.helperState === "ready" ? "OK" : "Setup"
+                value: root.helperState === "ready" ? "bereit" : "fehlt"
                 chipColor: root.stateColor(root.helperState)
               }
 
               StatusChip {
                 label: "Launcher"
-                value: root.launcherState === "ready" ? "OK" : "Setup"
+                value: root.launcherState === "ready" ? "bereit" : "Setup"
                 chipColor: root.stateColor(root.launcherState)
               }
 
@@ -492,7 +498,7 @@ Panel {
                 (root.helperVersion !== "" ? root.helperVersion : "nicht eingerichtet") +
                 " · Plugin: " + (root.pluginManaged === "git" ? (root.pluginAuto === "true" ? "Auto" : "Git") : "ZIP")
               color: root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
@@ -503,7 +509,7 @@ Panel {
           width: parent.width
           text: root.advancedVisible ? "▲  Erweiterte Optionen ausblenden" : "▼  Erweiterte Optionen anzeigen"
           foreground: root.barForeground
-          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          fontFamily: root.uiFont
           bordered: true
           onClicked: root.advancedVisible = !root.advancedVisible
         }
@@ -528,7 +534,7 @@ Panel {
             Text {
               text: "ERWEITERTE OPTIONEN"
               color: root.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.bold: true
             }
@@ -565,7 +571,7 @@ Panel {
             Text {
               text: "PLUGIN-UPDATES"
               color: root.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.bold: true
             }
@@ -599,7 +605,7 @@ Panel {
                 width: pluginUpdateGrid.cellWidth
                 text: "Plugin-Update prüfen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("plugin-update-check")
               }
@@ -608,7 +614,7 @@ Panel {
                 width: pluginUpdateGrid.cellWidth
                 text: "Plugin jetzt aktualisieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 active: root.pluginUpdate === "available"
                 onClicked: root.runAction("plugin-update-now")
@@ -618,7 +624,7 @@ Panel {
                 width: pluginUpdateGrid.cellWidth
                 text: root.pluginAuto === "true" ? "Auto-Updates ausschalten" : "Auto-Updates einschalten"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction(root.pluginAuto === "true" ? "plugin-auto-disable" : "plugin-auto-enable")
               }
@@ -627,7 +633,7 @@ Panel {
                 width: pluginUpdateGrid.cellWidth
                 text: "Updater-Log öffnen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("updater-log")
               }
@@ -639,7 +645,7 @@ Panel {
                 ? "Auto-Updates verwenden Omarchys eigenen Plugin-Updater mit Validierung und Rollback. Das beim Aktivieren vorhandene Git-Remote wird als vertrauenswürdige Quelle gespeichert."
                 : "Die aktuelle ZIP-Installation bleibt bewusst ohne unbekannte Update-Quelle. Sobald Omarchy Citizen aus einem Git-Repository installiert wird, erkennt das Backend dessen origin automatisch."
               color: root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
@@ -658,7 +664,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: root.checkingUpdate ? "Update wird geprüft…" : "LUG Update prüfen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.checkForUpdates()
               }
@@ -667,7 +673,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "LUG aktualisieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("update-helper")
               }
@@ -676,7 +682,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "Omarchy aktualisieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("system-update")
               }
@@ -685,7 +691,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "LUG Helper öffnen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("helper")
               }
@@ -694,7 +700,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "Wine-Runner"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("runners")
               }
@@ -703,7 +709,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "DXVK verwalten"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("dxvk")
               }
@@ -712,7 +718,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "RSI reparieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("repair-rsi")
               }
@@ -721,7 +727,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "Start-Script reparieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("repair-launch")
               }
@@ -730,7 +736,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "Start-Log öffnen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("log")
               }
@@ -739,7 +745,7 @@ Panel {
                 width: setupGrid.cellWidth
                 text: "Plugin-Debuglog öffnen"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("debug-log")
               }
@@ -750,7 +756,7 @@ Panel {
             Text {
               text: "NGL · EXPERIMENTELL"
               color: root.warning
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.bodySmall
               font.bold: true
             }
@@ -767,7 +773,7 @@ Panel {
                 width: nglGrid.cellWidth
                 text: "NGL Download"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("ngl-page")
               }
@@ -776,7 +782,7 @@ Panel {
                 width: nglGrid.cellWidth
                 text: "NGL installieren"
                 foreground: root.barForeground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                fontFamily: root.uiFont
                 bordered: true
                 onClicked: root.runAction("ngl-install")
               }
@@ -787,7 +793,7 @@ Panel {
               text: "NGL bleibt bewusst optional. Der normale RSI/LUG-Weg funktioniert unabhängig davon."
               color: root.warning
               opacity: 0.82
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.family: root.uiFont
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
@@ -798,7 +804,7 @@ Panel {
           width: parent.width
           text: "Ziel: spielen statt Linux administrieren. Für Support genügt normalerweise „Support-Paket erstellen“."
           color: root.muted
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.family: root.uiFont
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
         }
@@ -807,16 +813,17 @@ Panel {
   }
 
   component StatusChip: Rectangle {
+    id: chip
     property string label: ""
     property string value: ""
     property color chipColor: root.accent
 
     radius: 999
-    color: Qt.rgba(chipColor.r, chipColor.g, chipColor.b, 0.12)
-    border.color: chipColor
+    color: Qt.rgba(chip.chipColor.r, chip.chipColor.g, chip.chipColor.b, 0.12)
+    border.color: chip.chipColor
     border.width: 1
-    implicitWidth: chipRow.implicitWidth + Style.space(14)
-    implicitHeight: chipRow.implicitHeight + Style.space(8)
+    implicitWidth: chipRow.implicitWidth + Style.space(16)
+    implicitHeight: chipRow.implicitHeight + Style.space(9)
 
     Row {
       id: chipRow
@@ -824,16 +831,16 @@ Panel {
       spacing: Style.space(5)
 
       Text {
-        text: parent.label
+        text: chip.label
         color: root.muted
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.family: root.uiFont
         font.pixelSize: Style.font.caption
       }
 
       Text {
-        text: parent.value
-        color: parent.chipColor
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        text: chip.value
+        color: chip.chipColor
+        font.family: root.uiFont
         font.pixelSize: Style.font.caption
         font.bold: true
       }
@@ -841,16 +848,17 @@ Panel {
   }
 
   component StatusLine: Rectangle {
+    id: statusLine
     property string label: ""
     property string value: ""
     property string state: "unknown"
 
     width: parent.width
-    radius: 12
+    radius: 11
     color: root.surfaceRaised
     border.color: root.border
     border.width: 1
-    implicitHeight: lineRow.implicitHeight + Style.space(10)
+    implicitHeight: lineRow.implicitHeight + Style.space(12)
 
     Row {
       id: lineRow
@@ -861,25 +869,25 @@ Panel {
       spacing: Style.space(8)
 
       Rectangle {
-        width: 10
-        height: 10
+        width: 9
+        height: 9
         radius: 5
-        color: root.stateColor(parent.state)
+        color: root.stateColor(statusLine.state)
       }
 
       Text {
         width: Style.space(118)
-        text: parent.label
+        text: statusLine.label
         color: root.muted
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.family: root.uiFont
         font.pixelSize: Style.font.bodySmall
       }
 
       Text {
-        width: Math.max(0, parent.width - Style.space(158))
-        text: root.stateIcon(parent.state) + " " + parent.value
+        width: Math.max(0, lineRow.width - Style.space(158))
+        text: root.stateIcon(statusLine.state) + " " + statusLine.value
         color: root.barForeground
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.family: root.uiFont
         font.pixelSize: Style.font.bodySmall
         elide: Text.ElideRight
       }
