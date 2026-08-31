@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.8.0 – Rundum-Sorglos
+# Omarchy Citizen 0.8.1 – Rundum-Sorglos
 
 ## Installation
 
@@ -85,7 +85,7 @@ Das Paket enthält zusätzlich:
 - Maintenance-Ergebnis
 - Updater-Log
 
-## Wine-Kompatibilitätsfallback (0.8.0)
+## Wine-Kompatibilitätsfallback (0.8.1)
 
 Autopilot verwendet nicht blind die höchste Versionsnummer.
 

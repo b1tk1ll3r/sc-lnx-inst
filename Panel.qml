@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.8.0"
+  property string pluginVersion: "0.8.1"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -106,7 +106,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.8.0"
+    pluginVersion = values.plugin_version || "0.8.1"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""

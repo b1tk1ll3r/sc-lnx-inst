@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.8.0 — Development Preview
+# Omarchy Citizen 0.8.1 — Development Preview
 
 Omarchy Citizen is moving from a frontend around the LUG installer to an
 **owned, self-maintaining Star Citizen stack for Omarchy**.
@@ -49,3 +49,14 @@ See `DEVELOPMENT_STATUS.md`.
 ## License
 
 MIT.
+
+
+## 0.8.1 adapter hotfix
+
+The 0.8.0 preview accidentally mixed legacy shell actions with the new Go-owned
+stack. `citizenctl` has been rewritten as a thin adapter. There is now one
+authoritative implementation for install/status/launch/repair: the Go backend.
+
+A regression test exercises the adapter with a fake backend, including the exact
+full-setup path that previously failed with `backend_game_status: command not
+found` / `notify: command not found`.

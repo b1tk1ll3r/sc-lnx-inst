@@ -38,11 +38,11 @@ Update ruft das Backend Omarchys eigenen nicht-interaktiven Plugin-Updater auf.
 Vor jedem Commit/Release:
 
 ```bash
-cd backend
-./build.sh
-cd ..
+./tests/verify.sh
 omarchy plugin validate .
 ```
+
+Die GitHub-Actions-Datei `.github/workflows/ci.yml` führt dieselben Kernprüfungen automatisch bei Push und Pull Request aus.
 
 Dann Versionsnummern in `manifest.json`, `citizenctl`, Go-Backend und Dokumentation
 synchron halten, committen und pushen.

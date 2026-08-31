@@ -580,7 +580,7 @@ func (a *App) ensurePrefixComponents(gc GameConfig) error {
 	cache := filepath.Join(a.cacheDir, "winetricks-cache", tag)
 	_ = os.MkdirAll(cache, 0o755)
 	env = append(env, "W_CACHE="+cache, "WINETRICKS_DOWNLOADER=curl")
-	cmd := exec.Command(wt, "-q", "arial", "tahoma", "dxvk", "powershell", "win11")
+	cmd := exec.Command(wt, "-q", "arial", "tahoma", "powershell", "win11")
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	a.logf("winetricks %s output=%s", tag, compactDiagnostic(string(out)))

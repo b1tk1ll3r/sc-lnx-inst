@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "author": "Community prototype",
   "license": "MIT",
   "description": "Omarchy Citizen self-managed Star Citizen stack: compatible Wine selection, owned prefix/launcher installation, automatic DXVK/RSI updates, hardware gate, rollback and support diagnostics.",
