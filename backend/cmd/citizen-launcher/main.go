@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	appVersion  = "0.9.2"
+	appVersion  = "1.0.0"
 	releaseRepo = "sendnwv/omarchy-sc"
 )
 
@@ -80,6 +80,10 @@ func main() {
 		fatal(err)
 	}
 	app.rotateLog()
+	if os.Geteuid() != 0 {
+		app.migrateUserInstall()
+		app.repairDesktopIntegration()
+	}
 
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -168,12 +172,33 @@ func main() {
 		}
 	case "game-launch":
 		if err := app.gameLaunch(); err != nil {
+			if errors.Is(err, ErrLauncherAlreadyRunning) || errors.Is(err, ErrGameAlreadyRunning) {
+				fmt.Println(err)
+				break
+			}
 			fatal(err)
 		}
 	case "game-repair":
 		if err := app.gameRepair(); err != nil {
 			fatal(err)
 		}
+	case "prepare-system":
+		pid := 0
+		for i := 1; i+1 < len(args); i++ {
+			if args[i] == "--pid" {
+				fmt.Sscanf(args[i+1], "%d", &pid)
+			}
+		}
+		if hasArg(args[1:], "--root") {
+			if err := prepareSystemRoot(pid); err != nil {
+				fatal(err)
+			}
+		} else if err := app.prepareSystem(pid); err != nil {
+			fatal(err)
+		}
+	case "migrate-user":
+		app.migrateUserInstall()
+		app.repairDesktopIntegration()
 	case "gui":
 		if err := app.runGUI(args[1:]); err != nil {
 			fatal(err)
@@ -512,15 +537,12 @@ func (a *App) enableAuto() error {
 	if err := a.validatePlugin(); err != nil {
 		return err
 	}
-	if err := a.installService(); err != nil {
-		return err
-	}
 	a.updateConfig(func(c *Config) {
 		c.AutoApply = true
 		c.TrustedRemote = st.Remote
 		c.LastResult = "auto-enabled"
 	})
-	if err := run("", "systemctl", "--user", "enable", "--now", "citizen-launcher-maintenance.timer"); err != nil {
+	if err := a.syncMaintenanceTimer(); err != nil {
 		return err
 	}
 	a.logf("auto updates enabled trusted_remote=%q", st.Remote)
@@ -533,7 +555,9 @@ func (a *App) disableAuto() error {
 		c.AutoApply = false
 		c.LastResult = "auto-disabled"
 	})
-	_ = run("", "systemctl", "--user", "disable", "--now", "citizen-launcher-maintenance.timer")
+	if err := a.syncMaintenanceTimer(); err != nil {
+		return err
+	}
 	a.logf("auto updates disabled")
 	fmt.Println("disabled")
 	return nil
@@ -543,24 +567,17 @@ func (a *App) installService() error {
 	if err := os.MkdirAll(filepath.Join(a.home, ".config", "systemd", "user"), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(a.libDir, 0o755); err != nil {
-		return err
-	}
-	if err := a.selfSync(); err != nil {
-		return err
-	}
-
 	servicePath := filepath.Join(a.home, ".config", "systemd", "user", "citizen-launcher-maintenance.service")
 	timerPath := filepath.Join(a.home, ".config", "systemd", "user", "citizen-launcher-maintenance.timer")
-	backendPath := filepath.Join(a.libDir, "citizen-launcher")
+	backendPath := a.stableExecutable()
 
-	service := `[Unit]\nDescription=Citizen Launcher Autopilot maintenance\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=` + backendPath + ` tick\n`
-	timer := `[Unit]\nDescription=Maintain Citizen Launcher gaming stack automatically\n\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=6h\nRandomizedDelaySec=15min\nPersistent=true\nUnit=citizen-launcher-maintenance.service\n\n[Install]\nWantedBy=timers.target\n`
+	service := "[Unit]\nDescription=Citizen Launcher Autopilot maintenance\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=" + backendPath + " tick\nNice=10\nIOSchedulingClass=best-effort\nIOSchedulingPriority=7\n\n"
+	timer := "[Unit]\nDescription=Maintain Citizen Launcher gaming stack automatically\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=6h\nRandomizedDelaySec=15min\nPersistent=true\nUnit=citizen-launcher-maintenance.service\n\n[Install]\nWantedBy=timers.target\n"
 
-	if err := os.WriteFile(servicePath, []byte(strings.ReplaceAll(service, `\n`, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(servicePath, []byte(service), 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(timerPath, []byte(strings.ReplaceAll(timer, `\n`, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(timerPath, []byte(timer), 0o644); err != nil {
 		return err
 	}
 	return run("", "systemctl", "--user", "daemon-reload")
@@ -590,7 +607,13 @@ func (a *App) selfSync() error {
 	}
 	same, _ := sameFileHash(source, target)
 	if !same {
-		tmp := target + ".new"
+		tmpFile, err := os.CreateTemp(a.libDir, ".citizen-launcher.*.new")
+		if err != nil {
+			return err
+		}
+		tmp := tmpFile.Name()
+		_ = tmpFile.Close()
+		defer os.Remove(tmp)
 		if err := copyFile(source, tmp, 0o755); err != nil {
 			return err
 		}
@@ -673,10 +696,7 @@ func (a *App) updateConfig(fn func(*Config)) {
 	_ = os.MkdirAll(a.configDir, 0o755)
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	data = append(data, '\n')
-	tmp := a.configPath + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, a.configPath)
-	}
+	_ = atomicWriteFile(a.configPath, data, 0o600)
 }
 
 func (a *App) rotateLog() {
@@ -772,6 +792,12 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	// OpenFile's mode is ignored when dst already exists (for example a
+	// CreateTemp staging file). Always enforce the requested final mode.
+	if err := out.Chmod(mode); err != nil {
 		out.Close()
 		return err
 	}

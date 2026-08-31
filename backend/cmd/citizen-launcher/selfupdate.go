@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,16 +37,37 @@ func packageAutoUpdateActive() bool {
 	return exec.Command("systemctl", "is-enabled", "citizen-launcher-self-update.timer").Run() == nil
 }
 
+var releaseRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+func validReleaseRepo(v string) bool { return releaseRepoPattern.MatchString(strings.TrimSpace(v)) }
+
 func effectiveReleaseRepo() string {
-	if v := strings.TrimSpace(os.Getenv("CITIZEN_LAUNCHER_RELEASE_REPO")); v != "" {
-		return v
-	}
-	if data, err := os.ReadFile("/etc/citizen-launcher/release-repo"); err == nil {
-		if v := strings.TrimSpace(string(data)); v != "" {
+	// Never let a user-controlled environment variable redirect the privileged
+	// system updater. Root trusts only the root-owned config file or compiled repo.
+	if os.Geteuid() != 0 {
+		if v := strings.TrimSpace(os.Getenv("CITIZEN_LAUNCHER_RELEASE_REPO")); validReleaseRepo(v) {
 			return v
 		}
 	}
-	return releaseRepo
+	if data, err := os.ReadFile("/etc/citizen-launcher/release-repo"); err == nil {
+		trusted := true
+		if os.Geteuid() == 0 {
+			if fi, statErr := os.Stat("/etc/citizen-launcher/release-repo"); statErr != nil {
+				trusted = false
+			} else if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
+				trusted = false
+			}
+		}
+		if trusted {
+			if v := strings.TrimSpace(string(data)); validReleaseRepo(v) {
+				return v
+			}
+		}
+	}
+	if validReleaseRepo(releaseRepo) {
+		return releaseRepo
+	}
+	return "sendnwv/omarchy-sc"
 }
 
 func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
@@ -175,6 +197,9 @@ func (a *App) applySelfUpdate(system, quiet bool) error {
 	if err != nil {
 		return err
 	}
+	if latestNow := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v"); latestNow != st.Latest {
+		return fmt.Errorf("Release änderte sich während der Update-Prüfung (%s → %s); Update wird beim nächsten Lauf erneut geprüft", st.Latest, latestNow)
+	}
 	asset, err := a.releaseAssetForMode(release, st.Latest, st.Mode)
 	if err != nil {
 		return err
@@ -231,8 +256,14 @@ func (a *App) applyDebUpdate(asset githubAsset, version string, quiet bool) erro
 	)
 	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	if quiet {
-		cmd.Stdout = a.logWriter()
-		cmd.Stderr = a.logWriter()
+		if os.Geteuid() == 0 {
+			// The package updater runs with ProtectHome=true. Log to the systemd
+			// journal instead of trying to write below /root.
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		} else {
+			cmd.Stdout = a.logWriter()
+			cmd.Stderr = a.logWriter()
+		}
 	} else {
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	}
@@ -272,8 +303,13 @@ func verifyDebPackage(path, version string) error {
 	if pkg != "citizen-launcher" {
 		return fmt.Errorf("refusing package %q", pkg)
 	}
-	if compareVersions(pkgVersion, version) < 0 {
-		return fmt.Errorf("package version %q is older than release %q", pkgVersion, version)
+	versionOK := pkgVersion == version
+	if !versionOK {
+		rev := regexp.MustCompile(`^` + regexp.QuoteMeta(version) + `-[0-9]+$`)
+		versionOK = rev.MatchString(pkgVersion)
+	}
+	if !versionOK {
+		return fmt.Errorf("package version %q does not match release %q", pkgVersion, version)
 	}
 	if arch != "amd64" {
 		return fmt.Errorf("refusing architecture %q", arch)

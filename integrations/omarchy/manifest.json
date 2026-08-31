@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Citizen Launcher · Omarchy",
-  "version": "0.9.1",
+  "version": "1.0.0",
   "author": "Community prototype",
   "license": "MIT",
   "description": "Optional Omarchy bar integration for the distro-neutral Citizen Launcher.",

@@ -63,3 +63,25 @@ func TestVerifyDebPackageMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVerifyDebPackageRejectsMismatchedNewerVersion(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("dpkg-deb unavailable")
+	}
+	root := t.TempDir()
+	pkg := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(filepath.Join(pkg, "DEBIAN"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	control := "Package: citizen-launcher\nVersion: 9.9.9\nArchitecture: amd64\nMaintainer: test\nDescription: test\n"
+	if err := os.WriteFile(filepath.Join(pkg, "DEBIAN", "control"), []byte(control), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deb := filepath.Join(root, "citizen-launcher_1.0.0_amd64.deb")
+	if out, err := exec.Command("dpkg-deb", "--build", "--root-owner-group", pkg, deb).CombinedOutput(); err != nil {
+		t.Fatalf("dpkg-deb: %v: %s", err, out)
+	}
+	if err := verifyDebPackage(deb, "1.0.0"); err == nil {
+		t.Fatal("mismatched package version was accepted")
+	}
+}

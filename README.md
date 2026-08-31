@@ -1,107 +1,89 @@
-# Citizen Launcher 0.9.2
+# Citizen Launcher 1.0.0
 
-Citizen Launcher is the distro-neutral successor to Omarchy Citizen.
+Citizen Launcher is a distro-neutral Star Citizen setup, launch, repair and maintenance application for Linux. Omarchy support is optional; the core is one static Go binary shared by Debian/Ubuntu, Fedora, Arch/Omarchy and other desktop distributions.
 
-## Goal
+## Product goal
 
-**Install Linux → install Citizen Launcher → log into RSI → play.**
+**Install Citizen Launcher → click setup → log into RSI → install/play Star Citizen.**
 
-The core is one static Go binary and does not depend on Omarchy. Omarchy is an optional integration under `integrations/omarchy/`.
+The launcher owns the fragile user-space gaming stack so users do not have to pick Wine builds, copy DXVK DLLs or rebuild prefixes by hand. Kernel, GPU driver and base-distribution updates remain owned by the Linux distribution.
 
-## Supported targets
+## What 1.0 manages
 
-Primary targets:
+- hardware/Vulkan/AVX/RAM/storage/filesystem preflight
+- Linux `vm.max_map_count` and file-limit preparation
+- newest **locally compatible** stable LUG Wine runner with rollback retention
+- isolated Wine self-tests before runner activation
+- deterministic, SHA-256-pinned Winetricks base setup
+- verified portable PowerShell Core + RSI-compatible Wine wrapper (no fragile PowerShell MSI install)
+- DXVK download, digest verification, installation and native DLL overrides
+- RSI `latest.yml`, SHA-512 verified installer download and launcher repair
+- Star Citizen desktop entry and stable launch path
+- single-instance GUI, stack-operation locking and duplicate RSI/Star Citizen launch prevention
+- automatic gaming-stack maintenance
+- automatic verified Debian package self-updates
+- privacy-conscious support bundle and rotating logs
+- migration from older Omarchy Citizen / user-local installations
 
-- Debian / Ubuntu / Linux Mint
-- Fedora
-- Arch Linux / Omarchy
-- openSUSE (generic user install)
+## Install on Debian / Ubuntu / Mint
 
-Other amd64 Linux distributions can use the generic tarball when they provide a working Vulkan driver and the runtime requirements of the selected Wine runner.
-
-## GUI
-
-`citizen-launcher gui` starts a localhost-only UI from files embedded in the Go binary. Chromium-family browsers open it as a dedicated app window; otherwise it opens in the default browser. No GTK/Qt/WebKit development/runtime package is required by Citizen Launcher itself.
-
-## Architecture
-
-```text
-Standalone GUI / Omarchy bar integration
-                 ↓
-           Citizen Launcher
-             Go core
-                 ↓
- ┌───────────────┼────────────────┐
- Hardware      Wine             RSI Launcher
- readiness     selector          installer
-               + self-test
-                 ↓
-             Wine prefix
-                 ↓
-       Winetricks + DXVK
-                 ↓
-          Star Citizen
-```
-
-The managed game stack lives in XDG user directories:
-
-- `~/.config/citizen-launcher`
-- `~/.local/share/citizen-launcher`
-- `~/.local/state/citizen-launcher`
-- `~/.cache/citizen-launcher`
-
-Existing `omarchy-citizen` data is migrated when possible.
-
-## Build
+Install the release `.deb`:
 
 ```bash
-./build.sh
+sudo apt install ./citizen-launcher_1.0.0_amd64.deb
 ```
 
-## Install (any desktop distro)
+The package adds the desktop application and enables the system package-update timer. Future Citizen Launcher `.deb` releases can be installed automatically after release-asset digest and package metadata verification.
+
+## Generic desktop Linux install
 
 ```bash
 ./install.sh
 ```
 
-For Omarchy plus bar integration:
+or use the release tarball. Fedora/Arch/openSUSE users can use the generic build; an RPM spec is included for packaging work.
+
+For Omarchy plus the optional bar widget:
 
 ```bash
 ./install-omarchy.sh
 ```
 
-## Debian package
+## GUI
 
 ```bash
-./packaging/build-deb.sh
+citizen-launcher gui
 ```
 
-## Security boundaries
+The GUI is embedded in the binary and served only on `127.0.0.1` behind a random per-process route. Chromium-family browsers open it as an app window; otherwise the default browser is used. A file lock guarantees a single GUI backend. Opening Citizen Launcher again reuses the existing instance.
 
-Citizen Launcher manages its Wine/DXVK/RSI stack entirely as the current user. It does not create passwordless sudo/pacman/apt rules. GPU/kernel/base-system updates remain owned by the distribution.
+## Data locations
 
+- `~/.config/citizen-launcher`
+- `~/.local/share/citizen-launcher`
+- `~/.local/state/citizen-launcher`
+- `~/.cache/citizen-launcher`
+- default Wine prefix: `~/Games/star-citizen`
 
-## 0.9.2 fixes
+The uninstaller intentionally preserves the game prefix, game files, configuration and support logs unless the user removes them separately.
 
-- PowerShell is no longer a mandatory prefix component.
-- RSI `latest.yml` parser accepts Electron Builder `path:` and nested `files: - url:` formats.
-- Repair also refreshes DXVK.
-- Responsive dashboard prevents long GPU/distribution names from overflowing.
-- GUI shows concise user-facing errors with expandable technical details.
+## Build and verification
 
-## Automatic Citizen Launcher updates
+```bash
+./tests/full-verify.sh
+```
 
-Starting with 0.9.2 the launcher itself is part of Autopilot.
+The full gate includes shell syntax, gofmt cleanliness, unit/regression tests, `go vet`, static amd64 build, Go race detector, Omarchy update integration test, Debian package build/metadata/payload verification and generic tarball verification.
 
-### Debian / Ubuntu / Mint
+## Security / reliability boundaries
 
-Installing the `.deb` once enables `citizen-launcher-self-update.timer`. Future
-Citizen Launcher releases are checked automatically every six hours. A new `.deb`
-is only installed after its GitHub SHA-256 asset digest and Debian package metadata
-have been verified.
+- no passwordless sudo rules are created
+- executable release assets fail closed when their expected digest is unavailable
+- RSI installer is checked against its published SHA-512 metadata
+- Winetricks and the portable RSI PowerShell compatibility assets are version-pinned and checksum-verified
+- Wine/DXVK archives are extracted with path/symlink traversal checks
+- privileged Debian self-update accepts only the configured release repository, expected package name/version/architecture and verified SHA-256 asset digest
+- maintenance never rewrites the active Wine prefix while RSI Launcher/Star Citizen is using it
+- incomplete prefixes are preserved instead of blindly deleted
 
-The currently running GUI is never killed during package replacement. If an update
-landed while the GUI was open, the app shows **Neue Version installiert** and offers
-a controlled restart into the new binary.
-
-See `packaging/SELF_UPDATE.md` for details.
+See `ARCHITECTURE.md`, `DISTRO_SUPPORT.md` and `RELEASE_NOTES.md` for details.

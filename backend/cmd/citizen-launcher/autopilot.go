@@ -34,10 +34,11 @@ type githubAsset struct {
 }
 
 type componentMeta struct {
-	Version string `json:"version"`
-	Asset   string `json:"asset,omitempty"`
-	URL     string `json:"url,omitempty"`
-	Updated string `json:"updated"`
+	Version     string `json:"version"`
+	Asset       string `json:"asset,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Updated     string `json:"updated"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type wineRejection struct {
@@ -45,6 +46,25 @@ type wineRejection struct {
 	Reason      string `json:"reason"`
 	Fingerprint string `json:"fingerprint"`
 	Updated     string `json:"updated"`
+}
+
+func (a *App) syncMaintenanceTimer() error {
+	cfg := a.loadConfig()
+	want := cfg.AutoMaintain || cfg.AutoApply
+	if !detectPlatform().SystemdUser {
+		if want {
+			return a.selfSync()
+		}
+		return nil
+	}
+	if want {
+		if err := a.installService(); err != nil {
+			return err
+		}
+		return run("", "systemctl", "--user", "enable", "--now", "citizen-launcher-maintenance.timer")
+	}
+	_ = run("", "systemctl", "--user", "disable", "--now", "citizen-launcher-maintenance.timer")
+	return nil
 }
 
 func (a *App) enableAutopilot() error {
@@ -61,21 +81,8 @@ func (a *App) enableAutopilot() error {
 	}
 	cfg.LastResult = "autopilot-enabled"
 	a.saveConfig(cfg)
-
-	// systemd is common on Debian/Fedora/Arch/openSUSE, but not required by the
-	// launcher. Non-systemd desktops are maintained opportunistically on launch.
-	if detectPlatform().SystemdUser {
-		if err := a.installService(); err != nil {
-			return err
-		}
-		if err := run("", "systemctl", "--user", "enable", "--now", "citizen-launcher-maintenance.timer"); err != nil {
-			return err
-		}
-	} else {
-		if err := a.selfSync(); err != nil {
-			return err
-		}
-		a.logf("autopilot enabled without systemd user manager; launch-time maintenance active")
+	if err := a.syncMaintenanceTimer(); err != nil {
+		return err
 	}
 	a.logf("autopilot enabled auto_integration=%v", cfg.AutoApply)
 	fmt.Println("enabled")
@@ -87,6 +94,9 @@ func (a *App) disableAutopilot() error {
 	cfg.AutoMaintain = false
 	cfg.LastResult = "autopilot-disabled"
 	a.saveConfig(cfg)
+	if err := a.syncMaintenanceTimer(); err != nil {
+		return err
+	}
 	a.logf("autopilot disabled")
 	fmt.Println("disabled")
 	return nil
@@ -99,13 +109,32 @@ func (a *App) maintainGamingStack() error {
 	}
 	defer unlock()
 
+	gc := a.loadGameConfig()
+	if prefixInitialized(gc.Prefix) && prefixBusy(gc.Prefix) {
+		a.logf("maintenance deferred: Wine prefix is active")
+		return nil
+	}
+
 	a.logf("maintenance begin")
 	var problems []string
 
 	// LUG is no longer synchronized during normal maintenance. It is only a
 	// lazy portable-toolbox fallback when distro tools are missing.
+	wineReady := true
 	if err := a.syncWineRunner(); err != nil {
 		problems = append(problems, "Wine runner: "+err.Error())
+		wineReady = false
+	}
+	// Keep the RSI PowerShell compatibility layer healthy without invoking
+	// Winetricks/MSI during background maintenance. The prefix-busy guard above
+	// ensures that no live RSI/game process is modified underneath the user.
+	if wineReady && prefixInitialized(gc.Prefix) && a.powerShellState(gc.Prefix) != "ready" {
+		env, _, envErr := a.runnerEnv(gc.Prefix)
+		if envErr != nil {
+			problems = append(problems, "RSI compatibility: "+envErr.Error())
+		} else if psErr := a.ensurePowerShell(gc, env); psErr != nil {
+			problems = append(problems, "RSI compatibility: "+psErr.Error())
+		}
 	}
 	if err := a.syncDXVK(); err != nil {
 		problems = append(problems, "DXVK: "+err.Error())
@@ -122,6 +151,7 @@ func (a *App) maintainGamingStack() error {
 		c.LastMaintenance = time.Now().Format(time.RFC3339)
 		c.MaintenanceResult = result
 	})
+	a.cleanupManagedState()
 	a.logf("maintenance end result=%s", result)
 
 	if len(problems) > 0 {
@@ -159,7 +189,7 @@ func (a *App) syncLUGHelper() error {
 	if err := download(asset.BrowserDownloadURL, tmp); err != nil {
 		return err
 	}
-	if err := verifyReleaseDigest(tmp, asset.Digest); err != nil {
+	if err := requireReleaseDigest(tmp, asset.Digest); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -204,17 +234,7 @@ func (a *App) syncWineRunner() error {
 
 	var failures []string
 	for _, release := range releases {
-		asset, assetErr := selectAsset(release.Assets, func(n string) bool {
-			n = strings.ToLower(n)
-			if strings.Contains(n, "staging") || strings.Contains(n, "checksum") ||
-				strings.Contains(n, "sha") || strings.Contains(n, "experimental") ||
-				strings.Contains(n, "wayland") {
-				return false
-			}
-			return strings.Contains(n, "lug-wine-tkg-git") &&
-				(strings.HasSuffix(n, ".tar.xz") || strings.HasSuffix(n, ".tar.zst") ||
-					strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tgz"))
-		})
+		asset, assetErr := selectWineAsset(release.Assets)
 		if assetErr != nil {
 			continue
 		}
@@ -226,12 +246,28 @@ func (a *App) syncWineRunner() error {
 			continue
 		}
 
-		// Already-active compatible version: no download/test needed.
-		if readMetaVersion(metaPath) == release.TagName {
+		// Re-test an already-active runner when the CPU/libc fingerprint changed.
+		// This catches an OS upgrade that invalidates a previously working runner.
+		if meta := readComponentMeta(metaPath); meta.Version == release.TagName {
 			if p, _ := filepath.EvalSymlinks(current); p != "" {
 				if _, err := os.Stat(filepath.Join(p, "bin", "wine")); err == nil {
-					a.activateRunnerForPrefix(p)
-					return nil
+					if meta.Fingerprint == fingerprint {
+						a.activateRunnerForPrefix(p)
+						return nil
+					}
+					diag, testErr := a.selfTestRunnerDetailed(p)
+					if testErr == nil {
+						meta.Fingerprint = fingerprint
+						meta.Updated = time.Now().Format(time.RFC3339)
+						_ = writeMeta(metaPath, meta)
+						a.logf("active Wine runner revalidated: %s diagnostic=%s", release.TagName, compactDiagnostic(diag))
+						a.activateRunnerForPrefix(p)
+						return nil
+					}
+					reason := testErr.Error()
+					rejections[release.TagName] = wineRejection{Version: release.TagName, Reason: reason, Fingerprint: fingerprint, Updated: time.Now().Format(time.RFC3339)}
+					_ = writeWineRejections(rejectPath, rejections)
+					failures = append(failures, release.TagName+" no longer compatible: "+reason)
 				}
 			}
 		}
@@ -241,7 +277,7 @@ func (a *App) syncWineRunner() error {
 			failures = append(failures, release.TagName+" download: "+err.Error())
 			continue
 		}
-		if err := verifyReleaseDigest(archive, asset.Digest); err != nil {
+		if err := requireReleaseDigest(archive, asset.Digest); err != nil {
 			_ = os.Remove(archive)
 			failures = append(failures, release.TagName+" checksum: "+err.Error())
 			continue
@@ -252,11 +288,9 @@ func (a *App) syncWineRunner() error {
 			return err
 		}
 
-		extract := exec.Command("tar", "-xf", archive, "-C", stage)
-		out, extractErr := extract.CombinedOutput()
-		if extractErr != nil {
+		if extractErr := extractTarArchiveSafe(archive, stage); extractErr != nil {
 			os.RemoveAll(stage)
-			failures = append(failures, release.TagName+" extract: "+formatCommandFailure(extractErr, out))
+			failures = append(failures, release.TagName+" extract: "+extractErr.Error())
 			continue
 		}
 
@@ -294,6 +328,16 @@ func (a *App) syncWineRunner() error {
 			return err
 		}
 
+		// Preserve one known-previous runner for diagnostics/manual rollback.
+		if oldCurrent, err := filepath.EvalSymlinks(current); err == nil && oldCurrent != "" && oldCurrent != target {
+			previous := filepath.Join(base, "previous")
+			tmpPrevious := previous + ".new"
+			_ = os.Remove(tmpPrevious)
+			if os.Symlink(oldCurrent, tmpPrevious) == nil {
+				_ = os.Rename(tmpPrevious, previous)
+			}
+		}
+
 		tmpLink := current + ".new"
 		_ = os.Remove(tmpLink)
 		if err := os.Symlink(target, tmpLink); err != nil {
@@ -307,7 +351,7 @@ func (a *App) syncWineRunner() error {
 
 		if err := writeMeta(metaPath, componentMeta{
 			Version: release.TagName, Asset: asset.Name, URL: asset.BrowserDownloadURL,
-			Updated: time.Now().Format(time.RFC3339),
+			Updated: time.Now().Format(time.RFC3339), Fingerprint: fingerprint,
 		}); err != nil {
 			os.RemoveAll(stage)
 			return err
@@ -322,6 +366,19 @@ func (a *App) syncWineRunner() error {
 		return nil
 	}
 
+	// A previously validated runner may have fallen out of the recent-release
+	// window. Never strand a working installation just because newer candidates
+	// are incompatible with this CPU/libc combination.
+	if p, err := filepath.EvalSymlinks(current); err == nil && p != "" {
+		if diag, testErr := a.selfTestRunnerDetailed(p); testErr == nil {
+			meta := readComponentMeta(metaPath)
+			meta.Fingerprint = fingerprint
+			meta.Updated = time.Now().Format(time.RFC3339)
+			_ = writeMeta(metaPath, meta)
+			a.logf("no newer compatible Wine runner; keeping %s diagnostic=%s", meta.Version, compactDiagnostic(diag))
+			return nil
+		}
+	}
 	if len(failures) == 0 {
 		return errors.New("no stable LUG Wine asset found in recent releases")
 	}
@@ -355,7 +412,8 @@ func (a *App) selfTestRunnerDetailed(runner string) (string, error) {
 	}
 	defer os.RemoveAll(tmp)
 
-	env := append(os.Environ(),
+	env := environmentWithout(os.Environ(), "SDL_VIDEODRIVER", "WINE", "WINESERVER", "WINEPREFIX", "WINEARCH", "WINEDEBUG", "WINEDLLOVERRIDES")
+	env = append(env,
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"WINE="+wine,
 		"WINEPREFIX="+tmp,
@@ -440,12 +498,18 @@ func (a *App) selfTestRunnerDetailed(runner string) (string, error) {
 
 func formatCommandFailure(err error, out []byte) string {
 	text := strings.TrimSpace(string(out))
+	if len(text) > 1200 {
+		// Keep status output compact but preserve enough detail in updater.log.
+		text = text[len(text)-1200:]
+	}
+	if err == nil {
+		if text == "" {
+			return "command produced no expected result"
+		}
+		return text
+	}
 	if text == "" {
 		return err.Error()
-	}
-	// Keep status output compact but preserve enough detail in updater.log.
-	if len(text) > 1200 {
-		text = text[len(text)-1200:]
 	}
 	return err.Error() + ": " + text
 }
@@ -459,6 +523,11 @@ func compactDiagnostic(s string) string {
 }
 
 func (a *App) wineDoctor() error {
+	lock, err := a.stackOperationLock(2 * time.Second)
+	if err != nil {
+		return err
+	}
+	defer releaseFileLock(lock)
 	current := filepath.Join(a.vendorDir, "wine", "current")
 	root, err := filepath.EvalSymlinks(current)
 	if err != nil {
@@ -504,14 +573,73 @@ func (a *App) activateRunnerForPrefix(runner string) {
 	}
 }
 
+var dxvkRequiredDLLs = []string{"d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"}
+var dxvkOverrideNames = []string{"d3d8", "d3d9", "d3d10core", "d3d11", "dxgi"}
+
+func (a *App) dxvkMarkerPath() string { return filepath.Join(a.vendorDir, "dxvk", "overrides.txt") }
+
+func (a *App) dxvkDLLsReady(prefix string) bool {
+	if !prefixInitialized(prefix) {
+		return false
+	}
+	system32 := filepath.Join(prefix, "drive_c", "windows", "system32")
+	for _, name := range dxvkRequiredDLLs {
+		fi, err := os.Stat(filepath.Join(system32, name))
+		if err != nil || fi.Size() < 1024 {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) dxvkState(prefix, version string) string {
+	if !prefixInitialized(prefix) || version == "" {
+		return "missing"
+	}
+	if !a.dxvkDLLsReady(prefix) {
+		return "repair"
+	}
+	marker := readText(a.dxvkMarkerPath())
+	want := version + "\n" + prefix
+	if marker != want {
+		return "repair"
+	}
+	return "ready"
+}
+
+func (a *App) ensureDXVKOverrides(prefix, version string) error {
+	if prefixBusy(prefix) {
+		return errors.New("DXVK kann nicht geändert werden, solange der Wine-Prefix verwendet wird")
+	}
+	env, runner, err := a.runnerEnv(prefix)
+	if err != nil {
+		return err
+	}
+	wine := filepath.Join(runner, "bin", "wine")
+	const key = `HKEY_CURRENT_USER\Software\Wine\DllOverrides`
+	for _, dll := range dxvkOverrideNames {
+		cmd := exec.Command(wine, "reg", "add", key, "/v", dll, "/t", "REG_SZ", "/d", "native", "/f")
+		cmd.Env = env
+		out, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			return fmt.Errorf("DXVK DLL-Override %s: %s", dll, formatCommandFailure(runErr, out))
+		}
+	}
+	wait := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-w")
+	wait.Env = env
+	if out, runErr := wait.CombinedOutput(); runErr != nil {
+		return fmt.Errorf("DXVK Registry speichern: %s", formatCommandFailure(runErr, out))
+	}
+	return atomicWriteFile(a.dxvkMarkerPath(), []byte(version+"\n"+prefix+"\n"), 0o600)
+}
+
 func (a *App) syncDXVK() error {
 	prefix := a.configuredPrefix()
 	if prefix == "" || !prefixInitialized(prefix) {
 		return nil
 	}
 	if prefixBusy(prefix) {
-		a.logf("DXVK update deferred: Star Citizen Wine prefix is active")
-		return nil
+		return errors.New("DXVK-Aktualisierung pausiert: Wine-Prefix ist aktiv")
 	}
 
 	release, err := githubLatest(dxvkRepo)
@@ -528,7 +656,11 @@ func (a *App) syncDXVK() error {
 
 	base := filepath.Join(a.vendorDir, "dxvk")
 	metaPath := filepath.Join(base, "meta.json")
-	if readMetaVersion(metaPath) == release.TagName {
+	currentVersion := readMetaVersion(metaPath)
+	if currentVersion == release.TagName && a.dxvkDLLsReady(prefix) {
+		if err := a.ensureDXVKOverrides(prefix, release.TagName); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err := os.MkdirAll(base, 0o755); err != nil {
@@ -541,7 +673,7 @@ func (a *App) syncDXVK() error {
 	if err := download(asset.BrowserDownloadURL, archive); err != nil {
 		return err
 	}
-	if err := verifyReleaseDigest(archive, asset.Digest); err != nil {
+	if err := requireReleaseDigest(archive, asset.Digest); err != nil {
 		_ = os.Remove(archive)
 		return err
 	}
@@ -550,8 +682,8 @@ func (a *App) syncDXVK() error {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if out, err := exec.Command("tar", "-xf", archive, "-C", stage).CombinedOutput(); err != nil {
-		return fmt.Errorf("extract DXVK: %s", strings.TrimSpace(string(out)))
+	if err := extractTarArchiveSafe(archive, stage); err != nil {
+		return fmt.Errorf("DXVK entpacken: %w", err)
 	}
 	root, err := findRootContaining(stage, filepath.Join("x64", "dxgi.dll"))
 	if err != nil {
@@ -571,13 +703,19 @@ func (a *App) syncDXVK() error {
 			return err
 		}
 	}
+	if !a.dxvkDLLsReady(prefix) {
+		return errors.New("DXVK-Installation unvollständig: benötigte x64-DLLs fehlen")
+	}
+	if err := a.ensureDXVKOverrides(prefix, release.TagName); err != nil {
+		return err
+	}
 	if err := writeMeta(metaPath, componentMeta{
 		Version: release.TagName, Asset: asset.Name, URL: asset.BrowserDownloadURL,
 		Updated: time.Now().Format(time.RFC3339),
 	}); err != nil {
 		return err
 	}
-	a.logf("DXVK updated to %s", release.TagName)
+	a.logf("DXVK updated to %s and native DLL overrides activated", release.TagName)
 	_ = os.Remove(archive)
 	return nil
 }
@@ -628,7 +766,13 @@ func prefixBusy(prefix string) bool {
 	if err != nil {
 		return false
 	}
-	needle := []byte("WINEPREFIX=" + prefix)
+	// Wine keeps a few infrastructure processes around briefly even when no
+	// user-facing program is active. Those are safe to terminate/restart while
+	// holding the stack lock and must not permanently block maintenance.
+	infrastructure := []string{
+		"wineserver", "services.exe", "winedevice.exe", "explorer.exe",
+		"plugplay.exe", "rpcss.exe", "svchost.exe", "conhost.exe",
+	}
 	for _, e := range proc {
 		if !e.IsDir() {
 			continue
@@ -638,7 +782,19 @@ func prefixBusy(prefix string) bool {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join("/proc", name, "environ"))
-		if err == nil && strings.Contains(string(data), string(needle)) {
+		if err != nil || !processHasEnvValue(data, "WINEPREFIX", prefix) {
+			continue
+		}
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", name, "cmdline"))
+		cmd := strings.ToLower(strings.ReplaceAll(string(cmdline), "\x00", " "))
+		ignored := false
+		for _, infra := range infrastructure {
+			if strings.Contains(cmd, infra) {
+				ignored = true
+				break
+			}
+		}
+		if !ignored {
 			return true
 		}
 	}
@@ -741,6 +897,31 @@ func githubLatest(repo string) (githubRelease, error) {
 		return rel, errors.New("release has no tag")
 	}
 	return rel, nil
+}
+
+func selectWineAsset(assets []githubAsset) (githubAsset, error) {
+	valid := func(n string) bool {
+		n = strings.ToLower(n)
+		if strings.Contains(n, "staging") || strings.Contains(n, "checksum") ||
+			strings.Contains(n, "sha") || strings.Contains(n, "experimental") ||
+			strings.Contains(n, "wayland") || !strings.Contains(n, "lug-wine-tkg-git") {
+			return false
+		}
+		return strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tgz") ||
+			strings.HasSuffix(n, ".tar.xz") || strings.HasSuffix(n, ".tar.zst")
+	}
+	// Prefer gzip: it is decoded entirely in-process and therefore works on all
+	// supported distributions without another decompressor. XZ/Zstd remain
+	// compatible fallbacks for future upstream packaging changes.
+	for _, suffix := range []string{".tar.gz", ".tgz", ".tar.xz", ".tar.zst"} {
+		asset, err := selectAsset(assets, func(n string) bool {
+			return valid(n) && strings.HasSuffix(strings.ToLower(n), suffix)
+		})
+		if err == nil {
+			return asset, nil
+		}
+	}
+	return githubAsset{}, errors.New("no stable LUG Wine archive found")
 }
 
 func selectAsset(assets []githubAsset, match func(string) bool) (githubAsset, error) {
@@ -855,17 +1036,19 @@ func copyTree(src, dst string) error {
 	})
 }
 
-func readMetaVersion(path string) string {
+func readComponentMeta(path string) componentMeta {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return componentMeta{}
 	}
 	var meta componentMeta
 	if json.Unmarshal(data, &meta) != nil {
-		return ""
+		return componentMeta{}
 	}
-	return meta.Version
+	return meta
 }
+
+func readMetaVersion(path string) string { return readComponentMeta(path).Version }
 
 func writeMeta(path string, meta componentMeta) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -873,20 +1056,78 @@ func writeMeta(path string, meta componentMeta) error {
 	}
 	data, _ := json.MarshalIndent(meta, "", "  ")
 	data = append(data, '\n')
-	tmp := path + ".new"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWriteFile(path, data, 0o644)
 }
 
 func (a *App) saveConfig(cfg Config) {
 	_ = os.MkdirAll(a.configDir, 0o755)
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	data = append(data, '\n')
-	tmp := a.configPath + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, a.configPath)
+	_ = atomicWriteFile(a.configPath, data, 0o600)
+}
+
+func (a *App) cleanupManagedState() {
+	// Keep the active and previous Wine runners; old extracted runners can be
+	// large and are safe to re-download if ever needed again.
+	wineBase := filepath.Join(a.vendorDir, "wine")
+	keep := map[string]bool{}
+	for _, link := range []string{"current", "previous"} {
+		if p, err := filepath.EvalSymlinks(filepath.Join(wineBase, link)); err == nil && p != "" {
+			keep[filepath.Clean(p)] = true
+		}
+	}
+	if entries, err := os.ReadDir(wineBase); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasSuffix(e.Name(), ".new") {
+				continue
+			}
+			p := filepath.Join(wineBase, e.Name())
+			if !keep[filepath.Clean(p)] {
+				_ = os.RemoveAll(p)
+			}
+		}
+	}
+
+	pruneNamedDirectories(filepath.Join(a.vendorDir, "winetricks"), 2, "")
+	pruneNamedDirectories(a.stateDir, 3, "dxvk-backup-")
+	pruneOldCache(a.cacheDir, 30*24*time.Hour)
+}
+
+func pruneNamedDirectories(base string, keep int, prefix string) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	type item struct {
+		path string
+		mod  time.Time
+	}
+	var items []item
+	for _, e := range entries {
+		if !e.IsDir() || (prefix != "" && !strings.HasPrefix(e.Name(), prefix)) {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			items = append(items, item{filepath.Join(base, e.Name()), info.ModTime()})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].mod.After(items[j].mod) })
+	for i := keep; i < len(items); i++ {
+		_ = os.RemoveAll(items[i].path)
+	}
+}
+
+func pruneOldCache(base string, age time.Duration) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-age)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err == nil && info.ModTime().Before(cutoff) {
+			_ = os.RemoveAll(filepath.Join(base, e.Name()))
+		}
 	}
 }
 
@@ -926,4 +1167,14 @@ func verifyReleaseDigest(path, digest string) error {
 		return fmt.Errorf("SHA-256 mismatch for %s", filepath.Base(path))
 	}
 	return nil
+}
+
+// Executable gaming-stack components fail closed when GitHub does not provide
+// a SHA-256 digest. An upstream metadata outage is recoverable; activating an
+// unverifiable Wine/DXVK/toolbox download is not.
+func requireReleaseDigest(path, digest string) error {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(digest)), "sha256:") {
+		return fmt.Errorf("GitHub asset %s has no SHA-256 digest; refusing unverified component", filepath.Base(path))
+	}
+	return verifyReleaseDigest(path, digest)
 }

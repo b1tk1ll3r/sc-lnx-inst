@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"crypto/sha512"
 	"encoding/base64"
@@ -18,22 +19,32 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	winetricksRepo = "Winetricks/winetricks"
-	rsiBaseURL     = "https://install.robertsspaceindustries.com/rel/2"
-	rsiLatestYML   = rsiBaseURL + "/latest.yml"
+	winetricksVersion = "20260125"
+	winetricksSHA256  = "431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b"
+	rsiBaseURL        = "https://install.robertsspaceindustries.com/rel/2"
+	rsiLatestYML      = rsiBaseURL + "/latest.yml"
 )
 
-// Keep the mandatory prefix small and boring. PowerShell is deliberately not
-// a base dependency: current LUG documentation exposes it as a separate
-// maintenance/troubleshooting action, and PowerShell Core MSI installation can
-// fail under otherwise healthy Wine prefixes.
+// Keep Winetricks focused on small, proven prefix tweaks. PowerShell is managed
+// separately below because the MSI-based Winetricks path has failed on otherwise
+// healthy modern Wine builds. We install the official portable PowerShell Core
+// ZIP plus the RSI-compatible PowerShell wrapper instead.
 var basePrefixWinetricksVerbs = []string{"arial", "tahoma", "win11"}
 
-const wineFileAssociationsKey = "HKEY_CURRENT_USER\\Software\\Wine\\FileOpenAssociations"
+const (
+	wineFileAssociationsKey  = "HKEY_CURRENT_USER\\Software\\Wine\\FileOpenAssociations"
+	powerShellCoreVersion    = "7.4.19"
+	powerShellCoreURL        = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.19/PowerShell-7.4.19-win-x64.zip"
+	powerShellCoreSHA256     = "cd62ad6d8174cc6fb85b335a0058444bc934fe27c39fa97fe342134286d28af9"
+	powerShellWrapperVersion = "3.0.5"
+	powerShellWrapperURL     = "https://github.com/ProjectSynchro/powershell-wrapper-for-wine/releases/download/v3.0.5/powershell-wrapper.zip"
+	powerShellWrapperSHA256  = "08f866265e0395f4bc5ddb18f3dff345771d039a62911e506c62084fd2533ec3"
+)
 
 type GameConfig struct {
 	Prefix            string `json:"prefix"`
@@ -46,25 +57,28 @@ type GameConfig struct {
 }
 
 type GameStatus struct {
-	BackendVersion string `json:"backend_version"`
-	Health         string `json:"health"`
-	Hardware       string `json:"hardware"`
-	HardwareReason string `json:"hardware_reason,omitempty"`
-	GPU            string `json:"gpu,omitempty"`
-	Vulkan         string `json:"vulkan,omitempty"`
-	CPUAVX         bool   `json:"cpu_avx"`
-	RAMGiB         int    `json:"ram_gib"`
-	CombinedGiB    int    `json:"combined_gib"`
-	DiskFreeGiB    int    `json:"disk_free_gib"`
-	Prefix         string `json:"prefix"`
-	PrefixState    string `json:"prefix_state"`
-	LauncherState  string `json:"launcher_state"`
-	GameState      string `json:"game_state"`
-	WineVersion    string `json:"wine_version,omitempty"`
-	DXVKVersion    string `json:"dxvk_version,omitempty"`
-	LUGVersion     string `json:"lug_version,omitempty"`
-	RSIInstaller   string `json:"rsi_installer,omitempty"`
-	Autopilot      bool   `json:"autopilot"`
+	BackendVersion  string          `json:"backend_version"`
+	Health          string          `json:"health"`
+	Hardware        string          `json:"hardware"`
+	HardwareReason  string          `json:"hardware_reason,omitempty"`
+	GPU             string          `json:"gpu,omitempty"`
+	Vulkan          string          `json:"vulkan,omitempty"`
+	CPUAVX          bool            `json:"cpu_avx"`
+	RAMGiB          int             `json:"ram_gib"`
+	CombinedGiB     int             `json:"combined_gib"`
+	DiskFreeGiB     int             `json:"disk_free_gib"`
+	Prefix          string          `json:"prefix"`
+	PrefixState     string          `json:"prefix_state"`
+	LauncherState   string          `json:"launcher_state"`
+	GameState       string          `json:"game_state"`
+	WineVersion     string          `json:"wine_version,omitempty"`
+	DXVKVersion     string          `json:"dxvk_version,omitempty"`
+	DXVKState       string          `json:"dxvk_state"`
+	PowerShellState string          `json:"powershell_state"`
+	LUGVersion      string          `json:"lug_version,omitempty"`
+	RSIInstaller    string          `json:"rsi_installer,omitempty"`
+	Autopilot       bool            `json:"autopilot"`
+	System          SystemReadiness `json:"system"`
 }
 
 func (a *App) gameConfigPath() string { return filepath.Join(a.configDir, "game.json") }
@@ -101,46 +115,60 @@ func (a *App) saveGameConfig(cfg GameConfig) error {
 		return err
 	}
 	data = append(data, '\n')
-	tmp := a.gameConfigPath() + ".new"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, a.gameConfigPath())
+	return atomicWriteFile(a.gameConfigPath(), data, 0o600)
 }
 
 func (a *App) gameStatus() GameStatus {
 	gc := a.loadGameConfig()
 	uc := a.loadConfig()
 	hs := a.hardwareStatus(gc.Prefix)
+	sys := a.systemReadiness(gc.Prefix)
 	st := GameStatus{
-		BackendVersion: appVersion,
-		Health:         "setup",
-		Hardware:       hs.State,
-		HardwareReason: hs.Reason,
-		GPU:            hs.GPU,
-		Vulkan:         hs.Vulkan,
-		CPUAVX:         hs.AVX,
-		RAMGiB:         hs.RAMGiB,
-		CombinedGiB:    hs.CombinedGiB,
-		DiskFreeGiB:    hs.DiskFreeGiB,
-		Prefix:         gc.Prefix,
-		PrefixState:    "missing",
-		LauncherState:  "missing",
-		GameState:      "missing",
-		WineVersion:    readMetaVersion(filepath.Join(a.vendorDir, "wine", "meta.json")),
-		DXVKVersion:    readMetaVersion(filepath.Join(a.vendorDir, "dxvk", "meta.json")),
-		LUGVersion:     readMetaVersion(filepath.Join(a.vendorDir, "lug-helper", "meta.json")),
-		RSIInstaller:   gc.RSIInstaller,
-		Autopilot:      uc.AutoMaintain,
+		BackendVersion:  appVersion,
+		Health:          "setup",
+		Hardware:        hs.State,
+		HardwareReason:  hs.Reason,
+		GPU:             hs.GPU,
+		Vulkan:          hs.Vulkan,
+		CPUAVX:          hs.AVX,
+		RAMGiB:          hs.RAMGiB,
+		CombinedGiB:     hs.CombinedGiB,
+		DiskFreeGiB:     hs.DiskFreeGiB,
+		Prefix:          gc.Prefix,
+		PrefixState:     "missing",
+		LauncherState:   "missing",
+		GameState:       "missing",
+		WineVersion:     readMetaVersion(filepath.Join(a.vendorDir, "wine", "meta.json")),
+		DXVKVersion:     readMetaVersion(filepath.Join(a.vendorDir, "dxvk", "meta.json")),
+		DXVKState:       "missing",
+		PowerShellState: "missing",
+		LUGVersion:      readMetaVersion(filepath.Join(a.vendorDir, "lug-helper", "meta.json")),
+		RSIInstaller:    gc.RSIInstaller,
+		Autopilot:       uc.AutoMaintain,
+		System:          sys,
+	}
+	if err := validatePrefixPath(gc.Prefix); err != nil {
+		st.Health = "hardware-blocked"
+		st.HardwareReason = err.Error()
+		return st
 	}
 	if hs.State == "blocked" {
 		st.Health = "hardware-blocked"
+		return st
+	}
+	if sys.State == "blocked" {
+		st.Health = "hardware-blocked"
+		st.HardwareReason = sys.Reason
 		return st
 	}
 	if prefixInitialized(gc.Prefix) {
 		st.PrefixState = "ready"
 	} else if fi, err := os.Stat(gc.Prefix); err == nil && fi.IsDir() {
 		st.PrefixState = "partial"
+	}
+	if st.PrefixState == "ready" {
+		st.DXVKState = a.dxvkState(gc.Prefix, st.DXVKVersion)
+		st.PowerShellState = a.powerShellState(gc.Prefix)
 	}
 	if _, err := os.Stat(gc.LauncherEXE); err == nil {
 		st.LauncherState = "ready"
@@ -151,13 +179,28 @@ func (a *App) gameStatus() GameStatus {
 		st.GameState = "partial"
 	}
 
+	// Around 150 GiB of free space is the current LUG quick-start recommendation
+	// for a fresh install. Do not block an already-installed game because free
+	// space naturally drops after installation.
+	if st.GameState == "missing" && sys.StorageFreeGiB > 0 && sys.StorageFreeGiB < 150 {
+		st.Health = "hardware-blocked"
+		st.HardwareReason = fmt.Sprintf("Für eine Neuinstallation sind ungefähr 150 GiB freier Speicher empfohlen; erkannt wurden %d GiB.", sys.StorageFreeGiB)
+		return st
+	}
+
 	switch {
+	case sys.State == "prepare":
+		st.Health = "system-prepare"
 	case st.WineVersion == "":
 		st.Health = "setup"
 	case st.PrefixState == "partial":
 		st.Health = "repair"
 	case st.PrefixState != "ready":
 		st.Health = "install"
+	case st.DXVKState != "ready":
+		st.Health = "repair"
+	case st.PowerShellState != "ready":
+		st.Health = "repair"
 	case st.LauncherState != "ready":
 		st.Health = "launcher-repair"
 	case st.GameState != "ready":
@@ -206,9 +249,12 @@ func (a *App) hardwareStatus(prefix string) hardwareInfo {
 		}
 		h.RAMGiB = int(vals["MemTotal"] / (1024 * 1024))
 		h.CombinedGiB = int((vals["MemTotal"] + vals["SwapTotal"]) / (1024 * 1024))
-		if h.RAMGiB < 14 && h.State != "blocked" {
+		if h.RAMGiB < 16 && h.State != "blocked" {
 			h.State = "blocked"
 			h.Reason = "Weniger als 16 GiB RAM erkannt."
+		} else if h.CombinedGiB < 48 && h.State != "blocked" {
+			h.State = "blocked"
+			h.Reason = fmt.Sprintf("RAM + Swap/ZRAM ergeben %d GiB; für Star Citizen werden mindestens 48 GiB benötigt.", h.CombinedGiB)
 		}
 	}
 	var stat syscallStatfs
@@ -251,11 +297,32 @@ func (a *App) hardwareStatus(prefix string) hardwareInfo {
 	if path, err := exec.LookPath("vulkaninfo"); err == nil {
 		cmd := exec.Command(path, "--summary")
 		out, err := cmd.CombinedOutput()
-		if err != nil || strings.Contains(string(out), "VK_ERROR_INCOMPATIBLE_DRIVER") {
+		text := string(out)
+		low := strings.ToLower(text)
+		if err != nil || strings.Contains(text, "VK_ERROR_INCOMPATIBLE_DRIVER") {
 			h.State = "blocked"
 			h.Vulkan = "blocked"
 			h.Reason = "Vulkan ist nicht funktionsfähig."
 			return h
+		}
+		if strings.Contains(low, "device_type_cpu") || strings.Contains(low, "llvmpipe") || strings.Contains(low, "lavapipe") || strings.Contains(low, "softpipe") {
+			h.State = "blocked"
+			h.Vulkan = "blocked"
+			h.Reason = "Es wurde nur ein Software-Vulkan-Gerät erkannt. Star Citizen benötigt eine echte Vulkan-GPU."
+			return h
+		}
+		if m := regexp.MustCompile(`(?m)deviceName\s*=\s*(.+)$`).FindStringSubmatch(text); len(m) == 2 {
+			h.GPU = strings.TrimSpace(m[1])
+		}
+		if m := regexp.MustCompile(`(?m)apiVersion\s*=\s*([0-9]+)\.([0-9]+)`).FindStringSubmatch(text); len(m) == 3 {
+			major, _ := strconv.Atoi(m[1])
+			minor, _ := strconv.Atoi(m[2])
+			if major < 1 || (major == 1 && minor < 3) {
+				h.State = "blocked"
+				h.Vulkan = "blocked"
+				h.Reason = fmt.Sprintf("Vulkan %d.%d erkannt; der aktuelle DXVK-Stack benötigt Vulkan 1.3 oder neuer.", major, minor)
+				return h
+			}
 		}
 		h.Vulkan = "ready"
 	} else {
@@ -308,13 +375,44 @@ func (a *App) currentRunner() (string, error) {
 	return p, nil
 }
 
+func envValue(env []string, key string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		k, v, ok := strings.Cut(env[i], "=")
+		if ok && k == key {
+			return v
+		}
+	}
+	return ""
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	env = environmentWithout(env, key)
+	return append(env, key+"="+value)
+}
+
+func environmentWithout(env []string, keys ...string) []string {
+	remove := map[string]bool{}
+	for _, k := range keys {
+		remove[k] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		k, _, ok := strings.Cut(item, "=")
+		if ok && remove[k] {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func (a *App) runnerEnv(prefix string) ([]string, string, error) {
 	runner, err := a.currentRunner()
 	if err != nil {
 		return nil, "", err
 	}
 	bin := filepath.Join(runner, "bin")
-	env := append([]string{}, os.Environ()...)
+	env := environmentWithout(os.Environ(), "SDL_VIDEODRIVER", "WINE", "WINESERVER", "WINEPREFIX", "WINEARCH", "WINEDEBUG", "WINEDLLOVERRIDES")
 	env = append(env,
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"WINE="+filepath.Join(bin, "wine"),
@@ -394,42 +492,50 @@ func (a *App) toolsEnv(base []string) ([]string, error) {
 	dirs := []string{filepath.Join(runtimeRoot, "usr", "bin"), filepath.Join(runtimeRoot, "bin"), filepath.Join(runtimeRoot, "usr", "sbin")}
 	libdirs := []string{filepath.Join(runtimeRoot, "usr", "lib"), filepath.Join(runtimeRoot, "usr", "lib64"), filepath.Join(runtimeRoot, "lib"), filepath.Join(runtimeRoot, "lib64")}
 	env := append([]string{}, base...)
-	oldPath := os.Getenv("PATH")
-	env = append(env, "PATH="+strings.Join(dirs, string(os.PathListSeparator))+string(os.PathListSeparator)+oldPath)
-	existingLD := os.Getenv("LD_LIBRARY_PATH")
+	oldPath := envValue(env, "PATH")
+	newPath := strings.Join(dirs, string(os.PathListSeparator))
+	if oldPath != "" {
+		newPath += string(os.PathListSeparator) + oldPath
+	}
+	env = setEnvValue(env, "PATH", newPath)
+	existingLD := envValue(env, "LD_LIBRARY_PATH")
 	ld := strings.Join(libdirs, string(os.PathListSeparator))
 	if existingLD != "" {
 		ld += string(os.PathListSeparator) + existingLD
 	}
-	env = append(env, "LD_LIBRARY_PATH="+ld)
+	env = setEnvValue(env, "LD_LIBRARY_PATH", ld)
 	return env, nil
 }
 
 func (a *App) syncWinetricks() (string, string, error) {
-	rel, err := githubLatest(winetricksRepo)
-	if err != nil {
-		return "", "", err
-	}
-	tag := rel.TagName
-	if tag == "" {
-		return "", "", errors.New("Winetricks-Release ohne Tag")
-	}
+	// Pin the exact Winetricks build used by this Citizen Launcher release.
+	// Gaming-stack updates should be deterministic: a future Winetricks release
+	// must first pass our regression tests before a Launcher release adopts it.
+	tag := winetricksVersion
 	dir := filepath.Join(a.vendorDir, "winetricks", tag)
 	target := filepath.Join(dir, "winetricks")
-	if _, err := os.Stat(target); err == nil {
+	if err := verifySHA256Hex(target, winetricksSHA256); err == nil {
+		_ = os.Chmod(target, 0o755)
 		return target, tag, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", err
 	}
 	u := "https://raw.githubusercontent.com/Winetricks/winetricks/refs/tags/" + tag + "/src/winetricks"
-	if err := download(u, target+".new"); err != nil {
+	tmp := target + ".new"
+	_ = os.Remove(tmp)
+	if err := download(u, tmp); err != nil {
 		return "", "", err
 	}
-	if err := os.Chmod(target+".new", 0o755); err != nil {
+	if err := verifySHA256Hex(tmp, winetricksSHA256); err != nil {
+		_ = os.Remove(tmp)
+		return "", "", fmt.Errorf("Winetricks Integritätsprüfung: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		_ = os.Remove(tmp)
 		return "", "", err
 	}
-	if err := os.Rename(target+".new", target); err != nil {
+	if err := os.Rename(tmp, target); err != nil {
 		return "", "", err
 	}
 	return target, tag, nil
@@ -579,15 +685,35 @@ func (a *App) backupIncompletePrefix(gc GameConfig) (GameConfig, string, error) 
 }
 
 func (a *App) gameInstall() error {
-	unlock, err := a.acquireMaintenanceLock()
+	lock, err := a.stackOperationLock(2 * time.Second)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer releaseFileLock(lock)
+	return a.gameInstallUnlocked()
+}
+
+func (a *App) gameInstallUnlocked() error {
 	gc := a.loadGameConfig()
+	if err := validatePrefixPath(gc.Prefix); err != nil {
+		return err
+	}
+	if prefixInitialized(gc.Prefix) && prefixBusy(gc.Prefix) {
+		return errors.New("Der Star-Citizen-Wine-Prefix wird gerade verwendet. Bitte RSI Launcher, Wine-Konfiguration und Spiel schließen und erneut versuchen.")
+	}
 	hs := a.hardwareStatus(gc.Prefix)
 	if hs.State == "blocked" {
 		return fmt.Errorf("hardware nicht spielbereit: %s", hs.Reason)
+	}
+	if sys := a.systemReadiness(gc.Prefix); sys.State == "blocked" {
+		return errors.New(sys.Reason)
+	} else if sys.State == "prepare" {
+		if err := a.ensureSystemPrepared(); err != nil {
+			return fmt.Errorf("Systemvorbereitung: %w", err)
+		}
+	}
+	if sys := a.systemReadiness(gc.Prefix); sys.StorageFreeGiB > 0 && sys.StorageFreeGiB < 150 {
+		return fmt.Errorf("zu wenig freier Speicher: %d GiB; für eine Neuinstallation werden ungefähr 150 GiB empfohlen", sys.StorageFreeGiB)
 	}
 
 	// LUG is not part of the installation control path. A portable runtime is
@@ -618,6 +744,9 @@ func (a *App) gameInstall() error {
 	if err := a.ensurePrefixComponents(gc); err != nil {
 		return err
 	}
+	if err := a.syncDXVK(); err != nil {
+		return fmt.Errorf("DXVK: %w", err)
+	}
 	if err := a.ensureRSILauncher(gc, true); err != nil {
 		return err
 	}
@@ -626,9 +755,6 @@ func (a *App) gameInstall() error {
 	}
 	if err := a.writeLUGCompatibilityConfig(gc); err != nil {
 		a.logf("LUG compatibility config warning: %v", err)
-	}
-	if err := a.syncDXVK(); err != nil {
-		a.logf("DXVK post-install warning: %v", err)
 	}
 
 	gc.RSIInstaller = readText(filepath.Join(a.vendorDir, "rsi", "current.txt"))
@@ -659,7 +785,9 @@ func (a *App) initializePrefix(gc GameConfig) error {
 	}
 	wait := exec.Command(filepath.Join(bin, "wineserver"), "-w")
 	wait.Env = env
-	_, _ = wait.CombinedOutput()
+	if waitOut, waitErr := wait.CombinedOutput(); waitErr != nil {
+		return fmt.Errorf("Wine-Prefix Abschluss: %s", formatCommandFailure(waitErr, waitOut))
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for !prefixInitialized(gc.Prefix) && time.Now().Before(deadline) {
 		time.Sleep(300 * time.Millisecond)
@@ -697,6 +825,13 @@ func (a *App) ensurePrefixComponents(gc GameConfig) error {
 		}
 	}
 
+	// RSI Launcher 2.x uses Windows PowerShell for installer support, game
+	// directory setup and verification. Avoid the fragile MSI path entirely:
+	// install a verified portable PowerShell Core plus the Wine wrapper.
+	if err := a.ensurePowerShell(gc, env); err != nil {
+		return fmt.Errorf("PowerShell-Kompatibilität: %w", err)
+	}
+
 	runner, _ := a.currentRunner()
 	wine := filepath.Join(runner, "bin", "wine")
 	// This is a convenience tweak only: prevent Wine from creating host file
@@ -708,7 +843,297 @@ func (a *App) ensurePrefixComponents(gc GameConfig) error {
 	if regErr != nil {
 		a.logf("non-fatal Wine registry association tweak warning: %s", formatCommandFailure(regErr, out))
 	}
+	// Let Wine finish registry writes before DXVK changes the same prefix.
+	wait := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-w")
+	wait.Env = env
+	if waitOut, waitErr := wait.CombinedOutput(); waitErr != nil {
+		return fmt.Errorf("Wine-Prefix Abschluss: %s", formatCommandFailure(waitErr, waitOut))
+	}
 	_ = writeMeta(filepath.Join(a.vendorDir, "winetricks", "meta.json"), componentMeta{Version: tag, Updated: time.Now().Format(time.RFC3339)})
+	return nil
+}
+
+func (a *App) powerShellPaths(prefix string) (core, profile, wrapper64, wrapper32 string) {
+	coreDir := filepath.Join(prefix, "drive_c", "Program Files", "PowerShell", "7")
+	return filepath.Join(coreDir, "pwsh.exe"), filepath.Join(coreDir, "profile.ps1"),
+		filepath.Join(prefix, "drive_c", "windows", "system32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+		filepath.Join(prefix, "drive_c", "windows", "syswow64", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
+func (a *App) powerShellState(prefix string) string {
+	core, profile, wrapper64, wrapper32 := a.powerShellPaths(prefix)
+	for _, path := range []string{core, profile, wrapper64, wrapper32} {
+		fi, err := os.Stat(path)
+		if err != nil || fi.IsDir() || fi.Size() < 1024 {
+			return "repair"
+		}
+	}
+	marker := readText(filepath.Join(a.vendorDir, "powershell", "marker.txt"))
+	managed := powerShellCoreVersion + "+wrapper-" + powerShellWrapperVersion + "\n" + prefix
+	adopted := "verified\n" + prefix
+	if marker != managed && marker != adopted {
+		return "repair"
+	}
+	return "ready"
+}
+
+func (a *App) writePowerShellMarker(prefix, version string) error {
+	markerDir := filepath.Join(a.vendorDir, "powershell")
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		return err
+	}
+	return atomicWriteFile(filepath.Join(markerDir, "marker.txt"), []byte(version+"\n"+prefix+"\n"), 0o600)
+}
+
+func (a *App) probePowerShell(gc GameConfig, env []string) error {
+	_, _, wrapper64, _ := a.powerShellPaths(gc.Prefix)
+	runner, err := a.currentRunner()
+	if err != nil {
+		return err
+	}
+	wine := filepath.Join(runner, "bin", "wine")
+	probe := exec.Command(wine, wrapper64, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Write-Output CITIZEN_POWERSHELL_OK")
+	probe.Env = env
+	out, err := probe.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "CITIZEN_POWERSHELL_OK") {
+		return fmt.Errorf("PowerShell Selbsttest: %s", formatCommandFailure(err, out))
+	}
+	wait := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-w")
+	wait.Env = env
+	if out, err := wait.CombinedOutput(); err != nil {
+		return fmt.Errorf("PowerShell Abschluss: %s", formatCommandFailure(err, out))
+	}
+	return nil
+}
+
+func verifySHA256Hex(path, want string) error {
+	got, err := fileHash(path)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(want)) {
+		return fmt.Errorf("SHA-256 mismatch for %s", filepath.Base(path))
+	}
+	return nil
+}
+
+func extractZipSafe(path, dir string) error {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	cleanRoot, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cleanRoot, 0o755); err != nil {
+		return err
+	}
+	for _, zf := range r.File {
+		name := filepath.Clean(filepath.FromSlash(zf.Name))
+		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("unsicherer ZIP-Pfad: %q", zf.Name)
+		}
+		target := filepath.Join(cleanRoot, name)
+		rel, err := filepath.Rel(cleanRoot, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("ZIP-Pfad verlässt Zielverzeichnis: %q", zf.Name)
+		}
+		if zf.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Symlink im ZIP wird nicht akzeptiert: %q", zf.Name)
+		}
+		if zf.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, io.LimitReader(rc, 512<<20))
+		closeErr := out.Close()
+		rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
+func (a *App) ensurePowerShell(gc GameConfig, env []string) error {
+	if a.powerShellState(gc.Prefix) == "ready" {
+		return nil
+	}
+	// Adopt a working existing Winetricks/manual installation instead of
+	// overwriting it merely because Citizen Launcher did not create it.
+	core, profile, wrapper64Existing, wrapper32Existing := a.powerShellPaths(gc.Prefix)
+	allPresent := true
+	for _, path := range []string{core, profile, wrapper64Existing, wrapper32Existing} {
+		fi, err := os.Stat(path)
+		if err != nil || fi.IsDir() || fi.Size() < 1024 {
+			allPresent = false
+			break
+		}
+	}
+	if allPresent {
+		if err := a.probePowerShell(gc, env); err == nil {
+			if err := a.writePowerShellMarker(gc.Prefix, "verified"); err != nil {
+				return err
+			}
+			a.logf("adopted existing working PowerShell compatibility layer")
+			return nil
+		}
+	}
+
+	cacheDir := filepath.Join(a.cacheDir, "powershell")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return err
+	}
+	coreArchive := filepath.Join(cacheDir, "PowerShell-"+powerShellCoreVersion+"-win-x64.zip")
+	wrapperArchive := filepath.Join(cacheDir, "powershell-wrapper-"+powerShellWrapperVersion+".zip")
+	for _, asset := range []struct{ url, path, sha string }{
+		{powerShellCoreURL, coreArchive, powerShellCoreSHA256},
+		{powerShellWrapperURL, wrapperArchive, powerShellWrapperSHA256},
+	} {
+		if err := verifySHA256Hex(asset.path, asset.sha); err != nil {
+			_ = os.Remove(asset.path)
+			if err := download(asset.url, asset.path+".part"); err != nil {
+				_ = os.Remove(asset.path + ".part")
+				return err
+			}
+			if err := verifySHA256Hex(asset.path+".part", asset.sha); err != nil {
+				_ = os.Remove(asset.path + ".part")
+				return err
+			}
+			if err := os.Rename(asset.path+".part", asset.path); err != nil {
+				return err
+			}
+		}
+	}
+
+	stage, err := os.MkdirTemp(a.cacheDir, "powershell-stage-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	coreStage := filepath.Join(stage, "core")
+	wrapperStage := filepath.Join(stage, "wrapper")
+	if err := extractZipSafe(coreArchive, coreStage); err != nil {
+		return fmt.Errorf("PowerShell Core entpacken: %w", err)
+	}
+	if err := extractZipSafe(wrapperArchive, wrapperStage); err != nil {
+		return fmt.Errorf("PowerShell Wrapper entpacken: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(coreStage, "pwsh.exe")); err != nil {
+		return errors.New("PowerShell Core ZIP enthält pwsh.exe nicht")
+	}
+
+	coreTarget := filepath.Join(gc.Prefix, "drive_c", "Program Files", "PowerShell", "7")
+	_, _, wrapper64Target, wrapper32Target := a.powerShellPaths(gc.Prefix)
+	managedTargets := []string{coreTarget, wrapper64Target, wrapper32Target}
+	backups := make(map[string]string, len(managedTargets))
+	for _, target := range managedTargets {
+		backup := target + ".citizen-backup"
+		_ = os.RemoveAll(backup)
+		if _, err := os.Lstat(target); err == nil {
+			if err := os.Rename(target, backup); err != nil {
+				for original, saved := range backups {
+					_ = os.Rename(saved, original)
+				}
+				return fmt.Errorf("vorhandene PowerShell-Datei sichern: %w", err)
+			}
+			backups[target] = backup
+		}
+	}
+	restore := true
+	defer func() {
+		if !restore {
+			return
+		}
+		for _, target := range managedTargets {
+			_ = os.RemoveAll(target)
+		}
+		for original, saved := range backups {
+			_ = os.Rename(saved, original)
+		}
+	}()
+	if err := copyTree(coreStage, coreTarget); err != nil {
+		return fmt.Errorf("PowerShell Core installieren: %w", err)
+	}
+
+	findWrapper := func(bits string) (string, error) {
+		candidates := []string{
+			filepath.Join(wrapperStage, bits, "powershell.exe"),
+			filepath.Join(wrapperStage, "powershell"+bits+".exe"),
+		}
+		for _, p := range candidates {
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() > 1024 {
+				return p, nil
+			}
+		}
+		return "", fmt.Errorf("%s-bit PowerShell Wrapper fehlt", bits)
+	}
+	wrapper64, err := findWrapper("64")
+	if err != nil {
+		return err
+	}
+	wrapper32, err := findWrapper("32")
+	if err != nil {
+		return err
+	}
+	profileSource := filepath.Join(wrapperStage, "profile.ps1")
+	if _, err := os.Stat(profileSource); err != nil {
+		return errors.New("PowerShell Wrapper profile.ps1 fehlt")
+	}
+	for _, pair := range [][2]string{{wrapper64, wrapper64Target}, {wrapper32, wrapper32Target}, {profileSource, filepath.Join(coreTarget, "profile.ps1")}} {
+		if err := os.MkdirAll(filepath.Dir(pair[1]), 0o755); err != nil {
+			return err
+		}
+		if err := copyFile(pair[0], pair[1], 0o644); err != nil {
+			return err
+		}
+	}
+
+	runner, err := a.currentRunner()
+	if err != nil {
+		return err
+	}
+	wine := filepath.Join(runner, "bin", "wine")
+	reg := exec.Command(wine, "reg", "add", `HKEY_CURRENT_USER\Software\Wine\DllOverrides`, "/v", "powershell.exe", "/t", "REG_SZ", "/d", "native,builtin", "/f")
+	reg.Env = env
+	if out, err := reg.CombinedOutput(); err != nil {
+		return fmt.Errorf("PowerShell DLL-Override: %s", formatCommandFailure(err, out))
+	}
+	wait := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-w")
+	wait.Env = env
+	if out, err := wait.CombinedOutput(); err != nil {
+		return fmt.Errorf("PowerShell Registry Abschluss: %s", formatCommandFailure(err, out))
+	}
+	if err := a.probePowerShell(gc, env); err != nil {
+		return err
+	}
+	if err := a.writePowerShellMarker(gc.Prefix, powerShellCoreVersion+"+wrapper-"+powerShellWrapperVersion); err != nil {
+		return err
+	}
+	restore = false
+	for _, saved := range backups {
+		_ = os.RemoveAll(saved)
+	}
+	a.logf("PowerShell compatibility ready core=%s wrapper=%s", powerShellCoreVersion, powerShellWrapperVersion)
 	return nil
 }
 
@@ -775,25 +1200,36 @@ func (a *App) writeOwnedLaunchFiles(gc GameConfig) error {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
 	}
+	stable := a.stableExecutable()
 	script := filepath.Join(binDir, "star-citizen-launch")
-	backend := filepath.Join(a.libDir, "citizen-launcher")
-	content := "#!/usr/bin/env bash\nexec " + shellQuote(backend) + " game-launch\n"
-	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+	content := "#!/usr/bin/env bash\nexec " + shellQuote(stable) + " game-launch \"$@\"\n"
+	if err := atomicWriteFile(script, []byte(content), 0o755); err != nil {
 		return err
 	}
-	apps := filepath.Join(envOr("XDG_DATA_HOME", filepath.Join(a.home, ".local", "share")), "applications")
-	_ = os.MkdirAll(apps, 0o755)
-	desktop := `[Desktop Entry]
-Name=Star Citizen
-Comment=Star Citizen via Citizen Launcher
-Type=Application
-Categories=Game;
-Terminal=false
-StartupNotify=true
-StartupWMClass=rsi launcher.exe
-Exec=` + script + `\n`
-	if err := os.WriteFile(filepath.Join(apps, "citizen-launcher-star-citizen.desktop"), []byte(desktop), 0o644); err != nil {
+
+	apps := a.userApplicationsDir()
+	if err := os.MkdirAll(apps, 0o755); err != nil {
 		return err
+	}
+	desktop := "[Desktop Entry]\n" +
+		"Name=Star Citizen\n" +
+		"Comment=Star Citizen via Citizen Launcher\n" +
+		"Type=Application\n" +
+		"Categories=Game;\n" +
+		"Terminal=false\n" +
+		"StartupNotify=true\n" +
+		"StartupWMClass=RSI Launcher.exe\n" +
+		"Icon=citizen-launcher\n" +
+		"TryExec=" + stable + "\n" +
+		"Exec=" + desktopExecQuote(stable) + " game-launch\n"
+	if strings.Contains(desktop, `\\n`) {
+		return errors.New("internal desktop-entry newline error")
+	}
+	if err := atomicWriteFile(a.starDesktopPath(), []byte(desktop), 0o644); err != nil {
+		return err
+	}
+	if commandExists("update-desktop-database") {
+		_ = exec.Command("update-desktop-database", apps).Run()
 	}
 	return nil
 }
@@ -814,27 +1250,67 @@ func (a *App) writeLUGCompatibilityConfig(gc GameConfig) error {
 
 func (a *App) gameLaunch() error {
 	gc := a.loadGameConfig()
+	if err := validatePrefixPath(gc.Prefix); err != nil {
+		return err
+	}
+	state := a.prefixProcessState(gc.Prefix)
+	if state.Game {
+		return ErrGameAlreadyRunning
+	}
+	if state.RSI {
+		return ErrLauncherAlreadyRunning
+	}
+
+	lock, err := a.stackOperationLock(8 * time.Second)
+	if err != nil {
+		return err
+	}
+	defer releaseFileLock(lock)
+
+	state = a.prefixProcessState(gc.Prefix)
+	if state.Game {
+		return ErrGameAlreadyRunning
+	}
+	if state.RSI {
+		return ErrLauncherAlreadyRunning
+	}
+	if prefixBusy(gc.Prefix) {
+		return errors.New("Der Wine-Prefix wird bereits von einem anderen Prozess verwendet. Bitte laufende Wine-Werkzeuge schließen und erneut versuchen.")
+	}
+
 	st := a.gameStatus()
-	// On non-systemd distributions (or a stopped user timer), maintenance still
-	// happens opportunistically when the player launches the game. Never block
-	// the launch on network/update work.
+	triggerMaintenance := false
 	if cfg := a.loadConfig(); cfg.AutoMaintain {
-		stale := true
+		triggerMaintenance = true
 		if t, err := time.Parse(time.RFC3339, cfg.LastMaintenance); err == nil {
-			stale = time.Since(t) > 6*time.Hour
-		}
-		if stale && a.selfPath != "" {
-			_ = exec.Command(a.selfPath, "maintain").Start()
+			triggerMaintenance = time.Since(t) > 6*time.Hour
 		}
 	}
 	if st.Hardware == "blocked" {
 		return errors.New(st.HardwareReason)
+	}
+	if st.System.State == "blocked" {
+		return errors.New(st.System.Reason)
+	}
+	if st.System.State == "prepare" {
+		if err := a.ensureSystemPrepared(); err != nil {
+			return fmt.Errorf("Systemvorbereitung: %w", err)
+		}
+	}
+	if err := setLaunchNoFile(); err != nil {
+		a.logf("launch nofile warning: %v", err)
 	}
 	if !prefixInitialized(gc.Prefix) {
 		return errors.New("Wine-Prefix fehlt; zuerst Setup ausführen")
 	}
 	if _, err := os.Stat(gc.LauncherEXE); err != nil {
 		return errors.New("RSI Launcher fehlt; Reparatur ausführen")
+	}
+	if st.DXVKState != "ready" {
+		return errors.New("DXVK ist nicht vollständig aktiviert; bitte Automatisch reparieren ausführen")
+	}
+	if st.PowerShellState != "ready" {
+		return errors.New("Die RSI-PowerShell-Kompatibilität ist unvollständig; bitte Automatisch reparieren ausführen")
 	}
 	env, runner, err := a.runnerEnv(gc.Prefix)
 	if err != nil {
@@ -844,39 +1320,102 @@ func (a *App) gameLaunch() error {
 		"__GL_SHADER_DISK_CACHE=1",
 		"__GL_SHADER_DISK_CACHE_SIZE=10737418240",
 		"__GL_SHADER_DISK_CACHE_PATH="+gc.Prefix,
+		"__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1",
 		"MESA_SHADER_CACHE_DIR="+gc.Prefix,
 		"MESA_SHADER_CACHE_MAX_SIZE=10G",
 	)
+
+	// A running game/launcher was ruled out above. Clearing the dedicated
+	// wineserver here only removes stale prefix processes from previous crashes.
+	ws := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-k")
+	ws.Env = env
+	_, _ = ws.CombinedOutput()
+
 	log := filepath.Join(a.stateDir, "rsi-launcher.log")
 	_ = os.MkdirAll(a.stateDir, 0o755)
+	rotateFile(log, 8*1024*1024, 4*1024*1024)
 	f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(filepath.Join(runner, "bin", "wine"), gc.LauncherEXE)
 	cmd.Env = env
+	cmd.Dir = filepath.Dir(gc.LauncherEXE)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = f
 	cmd.Stderr = f
 	if err := cmd.Start(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	_ = f.Close()
-	a.logf("RSI Launcher started pid=%d", cmd.Process.Pid)
-	return nil
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	// Wine may hand off to the Windows child and let the wrapper process exit.
+	// Treat the launch as successful when the actual RSI process appears.
+	deadline := time.Now().Add(10 * time.Second)
+	var wrapperErr error
+	for time.Now().Before(deadline) {
+		if a.rsiLauncherRunning(gc.Prefix) {
+			a.logf("RSI Launcher started pid=%d", cmd.Process.Pid)
+			if triggerMaintenance && !detectPlatform().SystemdUser {
+				stable := a.stableExecutable()
+				go func() {
+					time.Sleep(1500 * time.Millisecond)
+					_ = exec.Command(stable, "maintain").Start()
+				}()
+			}
+			return nil
+		}
+		select {
+		case wrapperErr = <-waitCh:
+			if !a.rsiLauncherRunning(gc.Prefix) {
+				if wrapperErr != nil {
+					return fmt.Errorf("RSI Launcher wurde früh beendet: %v. Details: %s", wrapperErr, log)
+				}
+				return fmt.Errorf("RSI Launcher wurde beendet, bevor sein Prozess sichtbar wurde. Details: %s", log)
+			}
+		default:
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if a.rsiLauncherRunning(gc.Prefix) {
+		return nil
+	}
+	return fmt.Errorf("RSI Launcher wurde gestartet, hat aber innerhalb von 10 Sekunden keinen laufenden Launcher-Prozess erzeugt. Details: %s", log)
 }
 
 func (a *App) gameRepair() error {
+	lock, err := a.stackOperationLock(2 * time.Second)
+	if err != nil {
+		return err
+	}
+	defer releaseFileLock(lock)
+
 	gc := a.loadGameConfig()
+	if err := validatePrefixPath(gc.Prefix); err != nil {
+		return err
+	}
+	if prefixInitialized(gc.Prefix) && prefixBusy(gc.Prefix) {
+		return errors.New("Reparatur pausiert: RSI Launcher, Star Citizen oder ein anderes Wine-Werkzeug verwendet den Prefix noch.")
+	}
 	hs := a.hardwareStatus(gc.Prefix)
 	if hs.State == "blocked" {
 		return errors.New(hs.Reason)
+	}
+	if sys := a.systemReadiness(gc.Prefix); sys.State == "blocked" {
+		return errors.New(sys.Reason)
+	} else if sys.State == "prepare" {
+		if err := a.ensureSystemPrepared(); err != nil {
+			return err
+		}
 	}
 	if err := a.syncWineRunner(); err != nil {
 		return err
 	}
 	if !prefixInitialized(gc.Prefix) {
-		return a.gameInstall()
+		return a.gameInstallUnlocked()
 	}
 	if err := a.ensurePrefixComponents(gc); err != nil {
 		return err

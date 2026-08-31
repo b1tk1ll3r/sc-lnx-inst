@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.citizenlauncher.CitizenLauncher</id>
+  <name>Citizen Launcher</name>
+  <summary>Set up, launch, repair and maintain Star Citizen on Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.citizenlauncher"><name>Citizen Launcher Project</name></developer>
+  <description>
+    <p>Citizen Launcher manages a locally compatible Wine runner, DXVK, RSI Launcher compatibility, automatic maintenance and support diagnostics for Star Citizen on Linux.</p>
+  </description>
+  <launchable type="desktop-id">io.github.citizenlauncher.CitizenLauncher.desktop</launchable>
+  <url type="homepage">https://github.com/sendnwv/omarchy-sc</url>
+  <categories><category>Game</category></categories>
+  <provides><binary>citizen-launcher</binary></provides>
+  <releases><release version="1.0.0" date="2026-08-31"/></releases>
+  <content_rating type="oars-1.1"/>
+</component>

@@ -1,5 +1,5 @@
 Name: citizen-launcher
-Version: 0.9.2
+Version: 1.0.0
 Release: 1%{?dist}
 Summary: Star Citizen launcher and self-maintaining Wine stack for Linux
 License: MIT
