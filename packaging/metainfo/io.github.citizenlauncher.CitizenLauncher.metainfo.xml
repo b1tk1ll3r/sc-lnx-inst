@@ -13,6 +13,6 @@
   <url type="homepage">https://github.com/sendnwv/omarchy-sc</url>
   <categories><category>Game</category></categories>
   <provides><binary>citizen-launcher</binary></provides>
-  <releases><release version="1.0.0" date="2026-08-31"/></releases>
+  <releases><release version="1.0.1" date="2026-08-31"/><release version="1.0.0" date="2026-08-31"/></releases>
   <content_rating type="oars-1.1"/>
 </component>

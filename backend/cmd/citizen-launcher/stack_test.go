@@ -179,3 +179,116 @@ func TestRequiredReleaseDigestFailsClosed(t *testing.T) {
 		t.Fatalf("known SHA-256 rejected: %v", err)
 	}
 }
+
+func TestVulkanHardwareSelectionIgnoresLLVMPipeWhenRealGPUExists(t *testing.T) {
+	summary := `Devices:
+========
+GPU0:
+    apiVersion         = 1.4.305
+    deviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+    deviceName         = AMD Radeon Graphics (RADV PHOENIX2)
+GPU1:
+    apiVersion         = 1.4.305
+    deviceType         = PHYSICAL_DEVICE_TYPE_CPU
+    deviceName         = llvmpipe (LLVM 19.1.7, 256 bits)
+`
+	dev, ok := selectVulkanHardwareDevice(summary)
+	if !ok {
+		t.Fatal("real Vulkan GPU was rejected because a software ICD was also present")
+	}
+	if dev.Name != "AMD Radeon Graphics (RADV PHOENIX2)" {
+		t.Fatalf("selected GPU=%q", dev.Name)
+	}
+	if dev.APIMajor != 1 || dev.APIMinor != 4 {
+		t.Fatalf("selected Vulkan version=%d.%d", dev.APIMajor, dev.APIMinor)
+	}
+}
+
+func TestVulkanHardwareSelectionRejectsSoftwareOnly(t *testing.T) {
+	summary := `Devices:
+========
+GPU0:
+    apiVersion         = 1.4.305
+    deviceType         = PHYSICAL_DEVICE_TYPE_CPU
+    deviceName         = llvmpipe (LLVM 19.1.7, 256 bits)
+`
+	if dev, ok := selectVulkanHardwareDevice(summary); ok {
+		t.Fatalf("software-only Vulkan device accepted: %#v", dev)
+	}
+}
+
+func TestPowerShellProbeAcceptsSuccessfulWrapperWithoutStdout(t *testing.T) {
+	a := testApp(t)
+	prefix := filepath.Join(a.home, "Games", "star-citizen")
+	gc := GameConfig{Prefix: prefix}
+	core, _, wrapper64, _ := a.powerShellPaths(prefix)
+	for _, p := range []string{core, wrapper64} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, 2048), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := filepath.Join(a.vendorDir, "wine", "fixture")
+	bin := filepath.Join(runner, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture intentionally emits no stdout: this reproduces the real Wine
+	// behavior from the 1.0.0 support bundle.
+	for _, name := range []string{"wine", "wineserver"} {
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(a.vendorDir, "wine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(runner, filepath.Join(a.vendorDir, "wine", "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.probePowerShell(gc, os.Environ()); err != nil {
+		t.Fatalf("successful wrapper without stdout was rejected: %v", err)
+	}
+}
+
+func TestGameStatusStillReportsInstalledComponentsWhenHealthIsBlocked(t *testing.T) {
+	a := testApp(t)
+	prefix := filepath.Join(a.home, "Games", "star citizen") // intentionally invalid path: forces blocked health
+	gc := GameConfig{
+		Prefix:      prefix,
+		LauncherEXE: filepath.Join(prefix, "drive_c", "Program Files", "Roberts Space Industries", "RSI Launcher", "RSI Launcher.exe"),
+		GameDir:     filepath.Join(prefix, "drive_c", "Program Files", "Roberts Space Industries", "StarCitizen"),
+	}
+	for _, p := range []string{
+		filepath.Join(prefix, "drive_c"),
+		filepath.Dir(gc.LauncherEXE),
+		filepath.Join(gc.GameDir, "LIVE", "Bin64"),
+	} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(prefix, "system.reg"),
+		filepath.Join(prefix, "user.reg"),
+		gc.LauncherEXE,
+		filepath.Join(gc.GameDir, "LIVE", "Bin64", "StarCitizen.exe"),
+	} {
+		if err := os.WriteFile(p, []byte("fixture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.saveGameConfig(gc); err != nil {
+		t.Fatal(err)
+	}
+	st := a.gameStatus()
+	if st.Health != "hardware-blocked" {
+		t.Fatalf("health=%q want hardware-blocked", st.Health)
+	}
+	if st.PrefixState != "ready" || st.LauncherState != "ready" || st.GameState != "ready" {
+		t.Fatalf("blocked health hid real component state: prefix=%s launcher=%s game=%s", st.PrefixState, st.LauncherState, st.GameState)
+	}
+}

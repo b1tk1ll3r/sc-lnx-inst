@@ -1,10 +1,10 @@
-# Citizen Launcher 1.0.0 – Verification Report
+# Citizen Launcher 1.0.1 – Verification Report
 
 Date: 2026-08-31
 
 ## Release gate
 
-The 1.0.0 source tree passed the complete automated release gate:
+The 1.0.1 source tree passed the complete automated release gate:
 
 - shell syntax checks for installer, uninstaller, packaging and integration scripts
 - `gofmt` cleanliness
@@ -15,41 +15,35 @@ The 1.0.0 source tree passed the complete automated release gate:
 - Omarchy updater integration test against disposable local Git repositories
 - Debian package build and metadata/payload verification
 - generic Linux amd64 tarball build and execution check
-- process-level GUI single-instance test: a second GUI invocation reused the first localhost instance
-- live GUI `/api/ping` check reporting version 1.0.0
-- systemd service/timer syntax verification with `systemd-analyze verify`
-- desktop entry newline regression check (no literal `\\n` in Exec entries)
-- AppStream XML parse check
-- GitHub Actions CI/release YAML parse check
+- systemd service/timer syntax verification
+- desktop entry regression checks
+- AppStream and workflow validation inherited from the 1.0 release gate
 
-## Regression coverage added for 1.0.0
+## Real-machine regressions reproduced from the support bundle
 
-The Go test suite explicitly covers:
+The uploaded Debian 13 support bundle exposed two 1.0.0 false negatives:
 
-- safe archive extraction and traversal/symlink rejection
-- exact Wine-prefix process matching
-- GUI and stack-operation file locks
-- duplicate primary-action handler regression
-- Star Citizen/RSI duplicate launch handling
-- DXVK DLL/override state
-- deterministic Winetricks checksum and minimal base verbs
-- legacy user-local binary migration
-- broken desktop entry repair from the 0.9.2 literal-newline bug
-- copied executable permission preservation
-- Debian update package name/version/architecture validation
-- release asset selection/version comparison
-- Electron-builder RSI `latest.yml` variants
-- non-MSI portable PowerShell compatibility path
-- Wine registry path escaping
-- support-bundle sanitizer behavior
-- required SHA-256 release digest fail-closed behavior
+1. `vulkaninfo` reported both `AMD Radeon Graphics (RADV PHOENIX2)` and Mesa `llvmpipe`. 1.0.0 rejected the whole system merely because the software ICD was present. 1.0.1 parses devices independently and selects the real AMD GPU.
+2. The RSI PowerShell wrapper returned a successful process exit but no captured stdout. 1.0.0 incorrectly required a marker string in stdout. 1.0.1 validates PowerShell Core and then treats the wrapper's propagated exit status as authoritative.
+
+Automated regression tests cover both conditions.
+
+## Additional process-level verification
+
+A real two-process GUI test was run against the built binary:
+
+- first `gui --no-open` created a localhost endpoint
+- second `gui --no-open` returned the exact same endpoint instead of creating another backend
+- `/api/ping` on that endpoint reported version `1.0.1`
+
+A synthetic `vulkaninfo` run matching the support bundle's AMD + llvmpipe layout selected `AMD Radeon Graphics (RADV PHOENIX2)` and reported Vulkan `ready`. The sandbox itself has insufficient RAM for Star Citizen, so its overall hardware state remained blocked for RAM as expected; the GPU path was no longer the blocker.
 
 ## Final binary / package hashes
 
-- `backend/bin/citizen-launcher`: `5e55630dc47b89a11185384f09d79fb3813fce51b4d0e30a9660e6526c93a46d`
-- `dist/citizen-launcher_1.0.0_amd64.deb`: `976a4cb3efc193f9f05e880ab0456d80e49cb7b5db0a61621d4dc4a788e7c8a1`
-- `dist/citizen-launcher-1.0.0-linux-amd64.tar.gz`: `551bca5656382f79fd6e388d14f58555d0db66418a0388ab8a8ba2ac1a058e90`
+- `backend/bin/citizen-launcher`: `7cd0d85046b2c9ac295c6ef5b86f93a3452bfb3cd94cff048e7511db581f3d07`
+- `dist/citizen-launcher_1.0.1_amd64.deb`: `aba0944a0d2334f14f425e12a55ddd28d011449387e5be1ef3e0731e9d9a5119`
+- `dist/citizen-launcher-1.0.1-linux-amd64.tar.gz`: `59edf81938c305b1d86d917d38222470b4f5e42c9c3dc350bf1ac430d8748bfc`
 
 ## Scope boundary
 
-The release gate validates the launcher, package, updater, GUI, locks, migration, install/repair logic and local safety properties in the build environment. It cannot perform an RSI account login, download the full Star Citizen game, or execute a real game session with an external GPU from this sandbox. Those remain real-machine acceptance tests rather than simulated release-gate claims.
+The release gate validates the launcher, package, updater, GUI, locks, migration, install/repair logic and local safety properties. It cannot perform an RSI account login or a complete live Star Citizen game session from this sandbox. Those remain real-machine acceptance tests.

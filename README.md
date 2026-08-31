@@ -1,4 +1,4 @@
-# Citizen Launcher 1.0.0
+# Citizen Launcher 1.0.1
 
 Citizen Launcher is a distro-neutral Star Citizen setup, launch, repair and maintenance application for Linux. Omarchy support is optional; the core is one static Go binary shared by Debian/Ubuntu, Fedora, Arch/Omarchy and other desktop distributions.
 
@@ -30,7 +30,7 @@ The launcher owns the fragile user-space gaming stack so users do not have to pi
 Install the release `.deb`:
 
 ```bash
-sudo apt install ./citizen-launcher_1.0.0_amd64.deb
+sudo apt install ./citizen-launcher_1.0.1_amd64.deb
 ```
 
 The package adds the desktop application and enables the system package-update timer. Future Citizen Launcher `.deb` releases can be installed automatically after release-asset digest and package metadata verification.

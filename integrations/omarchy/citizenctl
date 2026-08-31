@@ -2,7 +2,7 @@
 set -u
 
 PLUGIN_ID="local.omarchy-citizen"
-PLUGIN_VERSION="1.0.0"
+PLUGIN_VERSION="1.0.1"
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"

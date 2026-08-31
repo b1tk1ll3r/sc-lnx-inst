@@ -147,20 +147,10 @@ func (a *App) gameStatus() GameStatus {
 		Autopilot:       uc.AutoMaintain,
 		System:          sys,
 	}
-	if err := validatePrefixPath(gc.Prefix); err != nil {
-		st.Health = "hardware-blocked"
-		st.HardwareReason = err.Error()
-		return st
-	}
-	if hs.State == "blocked" {
-		st.Health = "hardware-blocked"
-		return st
-	}
-	if sys.State == "blocked" {
-		st.Health = "hardware-blocked"
-		st.HardwareReason = sys.Reason
-		return st
-	}
+	// Always inspect the existing stack before deciding the overall health.
+	// Support bundles must remain truthful even when hardware/preflight is
+	// blocked; otherwise a perfectly valid prefix/launcher appears as missing.
+	prefixPathErr := validatePrefixPath(gc.Prefix)
 	if prefixInitialized(gc.Prefix) {
 		st.PrefixState = "ready"
 	} else if fi, err := os.Stat(gc.Prefix); err == nil && fi.IsDir() {
@@ -177,6 +167,23 @@ func (a *App) gameStatus() GameStatus {
 		st.GameState = "ready"
 	} else if _, err := os.Stat(filepath.Join(gc.GameDir, "LIVE", "Data.p4k")); err == nil {
 		st.GameState = "partial"
+	}
+
+	// Health precedence is evaluated only after component discovery so diagnosis
+	// never loses useful state.
+	if prefixPathErr != nil {
+		st.Health = "hardware-blocked"
+		st.HardwareReason = prefixPathErr.Error()
+		return st
+	}
+	if hs.State == "blocked" {
+		st.Health = "hardware-blocked"
+		return st
+	}
+	if sys.State == "blocked" {
+		st.Health = "hardware-blocked"
+		st.HardwareReason = sys.Reason
+		return st
 	}
 
 	// Around 150 GiB of free space is the current LUG quick-start recommendation
@@ -220,6 +227,90 @@ type hardwareInfo struct {
 	RAMGiB      int
 	CombinedGiB int
 	DiskFreeGiB int
+}
+
+type vulkanDevice struct {
+	Name     string
+	Type     string
+	APIMajor int
+	APIMinor int
+}
+
+func parseVulkanDevices(summary string) []vulkanDevice {
+	var devices []vulkanDevice
+	var current *vulkanDevice
+	flush := func() {
+		if current != nil && (current.Name != "" || current.Type != "" || current.APIMajor != 0) {
+			devices = append(devices, *current)
+		}
+	}
+	apiRE := regexp.MustCompile(`^([0-9]+)\.([0-9]+)`)
+	gpuRE := regexp.MustCompile(`^GPU[0-9]+:$`)
+	for _, raw := range strings.Split(summary, "\n") {
+		line := strings.TrimSpace(raw)
+		if gpuRE.MatchString(line) {
+			flush()
+			current = &vulkanDevice{}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+		switch key {
+		case "deviceName":
+			current.Name = val
+		case "deviceType":
+			current.Type = val
+		case "apiVersion":
+			if m := apiRE.FindStringSubmatch(val); len(m) == 3 {
+				current.APIMajor, _ = strconv.Atoi(m[1])
+				current.APIMinor, _ = strconv.Atoi(m[2])
+			}
+		}
+	}
+	flush()
+	return devices
+}
+
+func softwareVulkanDevice(d vulkanDevice) bool {
+	low := strings.ToLower(d.Name + " " + d.Type)
+	return strings.Contains(low, "physical_device_type_cpu") ||
+		strings.Contains(low, "llvmpipe") || strings.Contains(low, "lavapipe") || strings.Contains(low, "softpipe")
+}
+
+func vulkanDeviceRank(d vulkanDevice) int {
+	if softwareVulkanDevice(d) {
+		return -1
+	}
+	switch strings.ToUpper(d.Type) {
+	case "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU":
+		return 30
+	case "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU":
+		return 20
+	case "PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU":
+		return 10
+	default:
+		if d.Name != "" {
+			return 1
+		}
+	}
+	return 0
+}
+
+func selectVulkanHardwareDevice(summary string) (vulkanDevice, bool) {
+	best, rank := vulkanDevice{}, -1
+	for _, d := range parseVulkanDevices(summary) {
+		r := vulkanDeviceRank(d)
+		if r > rank {
+			best, rank = d, r
+		}
+	}
+	return best, rank >= 0
 }
 
 func (a *App) hardwareStatus(prefix string) hardwareInfo {
@@ -267,8 +358,8 @@ func (a *App) hardwareStatus(prefix string) hardwareInfo {
 	pci, _ := exec.Command("lspci", "-nnk").CombinedOutput()
 	p := string(pci)
 	if strings.TrimSpace(p) == "" {
-		// lspci/pciutils is optional on minimal Debian installations. Detect the
-		// QEMU VGA device through sysfs as a dependency-free fallback.
+		// lspci/pciutils is optional on minimal installations. Detect QEMU VGA
+		// through sysfs as a dependency-free fallback.
 		vendors, _ := filepath.Glob("/sys/class/drm/card*/device/vendor")
 		for _, vp := range vendors {
 			v, _ := os.ReadFile(vp)
@@ -287,45 +378,48 @@ func (a *App) hardwareStatus(prefix string) hardwareInfo {
 			}
 		}
 	}
-	lowp := strings.ToLower(p)
-	if strings.Contains(lowp, "1234:1111") || strings.Contains(lowp, "kernel driver in use: bochs") {
-		h.State = "blocked"
-		h.Vulkan = "blocked"
-		h.Reason = "QEMU Standard VGA/bochs-drm erkannt. Star Citizen benötigt eine echte Vulkan-GPU oder GPU-Passthrough."
-		return h
-	}
+	qemuFallback := strings.Contains(strings.ToLower(p), "1234:1111") || strings.Contains(strings.ToLower(p), "kernel driver in use: bochs")
+
 	if path, err := exec.LookPath("vulkaninfo"); err == nil {
 		cmd := exec.Command(path, "--summary")
 		out, err := cmd.CombinedOutput()
 		text := string(out)
-		low := strings.ToLower(text)
 		if err != nil || strings.Contains(text, "VK_ERROR_INCOMPATIBLE_DRIVER") {
 			h.State = "blocked"
 			h.Vulkan = "blocked"
 			h.Reason = "Vulkan ist nicht funktionsfähig."
 			return h
 		}
-		if strings.Contains(low, "device_type_cpu") || strings.Contains(low, "llvmpipe") || strings.Contains(low, "lavapipe") || strings.Contains(low, "softpipe") {
+		dev, hasHardware := selectVulkanHardwareDevice(text)
+		if !hasHardware {
 			h.State = "blocked"
 			h.Vulkan = "blocked"
-			h.Reason = "Es wurde nur ein Software-Vulkan-Gerät erkannt. Star Citizen benötigt eine echte Vulkan-GPU."
+			if qemuFallback {
+				h.Reason = "QEMU Standard VGA/bochs-drm erkannt und keine echte Vulkan-GPU verfügbar. Für Star Citizen ist GPU-Passthrough erforderlich."
+			} else {
+				h.Reason = "Es wurde nur ein Software-Vulkan-Gerät erkannt. Star Citizen benötigt eine echte Vulkan-GPU."
+			}
 			return h
 		}
-		if m := regexp.MustCompile(`(?m)deviceName\s*=\s*(.+)$`).FindStringSubmatch(text); len(m) == 2 {
-			h.GPU = strings.TrimSpace(m[1])
+		if dev.Name != "" {
+			h.GPU = dev.Name
 		}
-		if m := regexp.MustCompile(`(?m)apiVersion\s*=\s*([0-9]+)\.([0-9]+)`).FindStringSubmatch(text); len(m) == 3 {
-			major, _ := strconv.Atoi(m[1])
-			minor, _ := strconv.Atoi(m[2])
-			if major < 1 || (major == 1 && minor < 3) {
-				h.State = "blocked"
-				h.Vulkan = "blocked"
-				h.Reason = fmt.Sprintf("Vulkan %d.%d erkannt; der aktuelle DXVK-Stack benötigt Vulkan 1.3 oder neuer.", major, minor)
-				return h
-			}
+		if dev.APIMajor < 1 || (dev.APIMajor == 1 && dev.APIMinor < 3) {
+			h.State = "blocked"
+			h.Vulkan = "blocked"
+			h.Reason = fmt.Sprintf("Vulkan %d.%d erkannt; der aktuelle DXVK-Stack benötigt Vulkan 1.3 oder neuer.", dev.APIMajor, dev.APIMinor)
+			return h
 		}
 		h.Vulkan = "ready"
 	} else {
+		// Without vulkaninfo we can only make a provisional assessment. QEMU's
+		// bochs framebuffer is still a hard block because it is not a Vulkan GPU.
+		if qemuFallback {
+			h.State = "blocked"
+			h.Vulkan = "blocked"
+			h.Reason = "QEMU Standard VGA/bochs-drm erkannt. Star Citizen benötigt eine echte Vulkan-GPU oder GPU-Passthrough."
+			return h
+		}
 		matches, _ := filepath.Glob("/usr/share/vulkan/icd.d/*.json")
 		if len(matches) > 0 {
 			h.Vulkan = "probable"
@@ -886,17 +980,27 @@ func (a *App) writePowerShellMarker(prefix, version string) error {
 }
 
 func (a *App) probePowerShell(gc GameConfig, env []string) error {
-	_, _, wrapper64, _ := a.powerShellPaths(gc.Prefix)
+	core, _, wrapper64, _ := a.powerShellPaths(gc.Prefix)
 	runner, err := a.currentRunner()
 	if err != nil {
 		return err
 	}
 	wine := filepath.Join(runner, "bin", "wine")
-	probe := exec.Command(wine, wrapper64, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Write-Output CITIZEN_POWERSHELL_OK")
-	probe.Env = env
-	out, err := probe.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "CITIZEN_POWERSHELL_OK") {
-		return fmt.Errorf("PowerShell Selbsttest: %s", formatCommandFailure(err, out))
+
+	// Validate PowerShell Core directly first. Then validate the compatibility
+	// wrapper using the invocation shape documented by the wrapper project.
+	// Wine does not reliably forward stdout from a Windows child spawned by
+	// another Windows executable, while wrapper v3+ deliberately propagates the
+	// child's exit status. A successful exit is therefore authoritative.
+	coreProbe := exec.Command(wine, core, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0")
+	coreProbe.Env = env
+	if out, err := coreProbe.CombinedOutput(); err != nil {
+		return fmt.Errorf("PowerShell Core Selbsttest: %s", formatCommandFailure(err, out))
+	}
+	wrapperProbe := exec.Command(wine, wrapper64, "-NoLogo", "-NonInteractive", "exit 0")
+	wrapperProbe.Env = env
+	if out, err := wrapperProbe.CombinedOutput(); err != nil {
+		return fmt.Errorf("PowerShell Wrapper Selbsttest: %s", formatCommandFailure(err, out))
 	}
 	wait := exec.Command(filepath.Join(runner, "bin", "wineserver"), "-w")
 	wait.Env = env
