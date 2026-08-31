@@ -49,6 +49,7 @@ omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 "$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" install-service >/dev/null 2>&1 || true
 
 omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || true
+"$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" autopilot enable >/tmp/omarchy-citizen-autopilot-install.log 2>&1 || true
 omarchy bar move "$PLUGIN_ID" --section right >/dev/null 2>&1 || true
 
 # QML hot-reload is currently unreliable for third-party bar plugins.

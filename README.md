@@ -1,107 +1,70 @@
-# Omarchy Citizen 0.6.4
+# Omarchy Citizen 0.7.0
 
-A plug-and-play Star Citizen control panel for Omarchy.
+## Rundum-Sorglos / Autopilot
 
-## Design goal
+Omarchy Citizen 0.7.0 changes the architecture from "frontend for packages the
+user maintains" to "self-maintaining Star Citizen appliance".
 
-**Play Star Citizen, don't administer Linux.**
+Autopilot manages the complete user-space gaming stack:
 
-The default UI deliberately exposes only:
+- Omarchy Citizen plugin updates (for clean Git-managed installs)
+- official Star Citizen LUG Helper **AppImage**
+- stable `lug-wine-tkg-git` Wine runner
+- DXVK
+- Wine prefix health testing
+- launch-script Wine runner selection
+- repair / recovery
+- support logs
 
-- Setup / Start
-- Guided repair
-- Create support bundle
+The LUG Helper AppImage is preferred over the AUR package. Current LUG releases
+bundle their GUI/runtime dependencies, reducing the amount of Arch package
+knowledge required from the player.
 
-Advanced Wine/DXVK/LUG/NGL controls remain available behind an advanced section.
+### Update model
 
-## 0.6.0 highlights
+A systemd user timer runs every six hours. Each candidate Wine runner is tested
+in a throw-away Wine prefix before it can become the active runner. The test
+requires:
 
-- one primary action that adapts to current system state
-- guided first-time setup
-- symptom-based repair assistant
-- persistent plugin debug log
-- one-click sanitized support bundle
-- support ID for remote troubleshooting
-- Omarchy's native `omarchy debug --no-sudo --print` included in support bundles
-- advanced controls hidden by default
-- optional NGL remains isolated from the normal launcher path
-- Go-based plugin update backend with Git remote pinning
-- optional automatic updates via systemd user timer
-- updater status/log included in support bundles
+- successful `wineboot`
+- `drive_c`
+- `system.reg`
+- `user.reg`
+- a valid `%APPDATA%` response
 
-## Local debug log
+If an upstream runner fails that test, the previous working runner stays active.
+
+DXVK is only changed while the Star Citizen Wine prefix is not in use. Existing
+DLLs are backed up before replacement.
+
+### What Autopilot deliberately does not bypass
+
+Kernel, GPU driver and base Omarchy package upgrades still belong to Omarchy's
+blessed `omarchy update` pipeline. Omarchy Citizen does not install a passwordless
+pacman/sudo backdoor.
+
+That boundary lets the Star Citizen stack remain self-maintaining without giving
+a third-party QML plugin permanent unattended root package-management rights.
+
+## Local state
+
+Managed components:
 
 ```text
-~/.local/state/omarchy-citizen/omarchy-citizen.log
+~/.local/share/omarchy-citizen/vendor/
+├── lug-helper/
+├── wine/
+└── dxvk/
 ```
 
-The log rotates automatically at roughly 4 MiB and keeps the newest ~2 MiB.
-
-## Support bundle
-
-One click creates:
+Logs:
 
 ```text
-~/Downloads/Omarchy-Citizen-Support-<support-id>.tar.gz
+~/.local/state/omarchy-citizen/
+├── omarchy-citizen.log
+└── updater.log
 ```
-
-The exported data is sanitized on a best-effort basis before packaging.
-
-See [`INSTALLATION.md`](INSTALLATION.md) for details.
 
 ## License
 
 MIT.
-
-## Go update backend
-
-The bundled static Go binary lives at:
-
-```text
-backend/bin/omarchy-citizen-backend
-```
-
-For Git-managed Omarchy installations it checks the checkout and delegates actual
-updates to Omarchy's native `omarchy plugin update local.omarchy-citizen --yes`.
-Automatic updates are opt-in and run through a systemd user timer roughly every six
-hours. The Git `origin` present when auto-update is enabled is pinned as the trusted
-remote; unattended updates stop if that remote changes or the checkout is dirty.
-
-See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DISTRIBUTION.md).
-
-
-## 0.6.4 hotfix
-
-- primary/setup actions now run through a Quickshell `Process` instead of fire-and-forget `bar.run`
-- the panel shows `WIRD GESTARTET` immediately after a click
-- startup failures stay visible in the panel instead of silently closing it
-- terminal launch has a monitored fallback path and logs immediate launcher failures
-- installers restart the Omarchy shell after QML changes to avoid stale third-party plugin QML
-
-## 0.6.4 UI / setup hotfix
-
-- fixed `undefined` in reusable status rows and chips
-- panel no longer inherits the bar's theme font; uses a neutral system sans font
-- first-time setup keeps the panel open and shows a visible status message
-- setup terminal is launched directly through `xdg-terminal-exec`/UWSM with separate argv
-- failed package/AUR setup remains visible instead of the terminal disappearing immediately
-
-## 0.6.4 incomplete-prefix recovery
-
-- a configured folder is no longer considered a valid Wine prefix merely because it exists
-- valid prefixes require `drive_c`, `system.reg`, and `user.reg`
-- half-created prefixes are shown as `unvollständig`
-- one-click recovery renames the incomplete directory to a timestamped backup instead of deleting it
-- stale LUG target config files are backed up before a clean reinstall
-- existing `Data.p4k` is never moved by Omarchy Citizen; migration is delegated to the LUG Helper
-- support bundles now include the newest `/tmp/lughelper-install-*.log` and a prefix-health report
-
-## 0.6.4 visible recovery hotfix
-
-- incomplete-prefix recovery no longer spawns a hidden second background process
-- `SETUP SICHER REPARIEREN` opens a visible terminal directly
-- the incomplete prefix is automatically renamed to a timestamped backup; it is never deleted
-- LUG reinstall output remains visible and is logged at the same time
-- if recovery fails, the terminal stays open with the error code and support instructions
-- guided setup, repair assistant, support bundle creation and NGL file selection no longer use nested `nohup` wrappers
-- updater status `blocked-dirty` is displayed as the user-friendly `lokale Änderungen · Update pausiert`

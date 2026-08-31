@@ -4,6 +4,8 @@ set -euo pipefail
 PLUGIN_ID="local.omarchy-citizen"
 DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 
+BACKEND="$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend"
+[[ -x "$BACKEND" ]] && "$BACKEND" uninstall-service >/dev/null 2>&1 || true
 omarchy plugin disable "$PLUGIN_ID" 2>/dev/null || true
 
 BACKEND="$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend"

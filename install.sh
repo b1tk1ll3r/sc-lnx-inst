@@ -36,7 +36,11 @@ omarchy-shell shell rescanPlugins
 
 echo "Aktiviere Plugin..."
 "$DEST/backend/bin/omarchy-citizen-backend" self-sync >/dev/null 2>&1 || true
-"$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" install-service >/dev/null 2>&1 || true
+echo "Aktiviere Rundum-Sorglos Autopilot …"
+"$HOME/.local/lib/omarchy-citizen/omarchy-citizen-backend" autopilot enable || {
+  echo "Hinweis: Autopilot konnte beim Installer noch nicht vollständig synchronisieren."
+  echo "Der SC-Setup-Button versucht es erneut und protokolliert die Ursache."
+}
 
 omarchy plugin enable "$PLUGIN_ID"
 
@@ -44,7 +48,7 @@ omarchy plugin enable "$PLUGIN_ID"
 omarchy restart shell >/dev/null 2>&1 || true
 
 echo
-echo "Omarchy Citizen 0.6.4 wurde installiert:"
+echo "Omarchy Citizen 0.7.0 wurde installiert:"
 echo "  $DEST"
 echo
 echo "Links-Klick auf 'SC' in der Omarchy-Leiste öffnet das Star-Citizen-Panel."

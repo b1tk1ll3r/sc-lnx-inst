@@ -16,34 +16,43 @@ import (
 )
 
 const (
-	appVersion = "0.6.4"
+	appVersion = "0.7.0"
 	pluginID   = "local.omarchy-citizen"
 )
 
 type Config struct {
-	AutoApply     bool   `json:"auto_apply"`
-	TrustedRemote string `json:"trusted_remote,omitempty"`
-	LastCheck     string `json:"last_check,omitempty"`
-	LastUpdate    string `json:"last_update,omitempty"`
-	LastResult    string `json:"last_result,omitempty"`
+	AutoApply         bool   `json:"auto_apply"`
+	AutoMaintain      bool   `json:"auto_maintain"`
+	TrustedRemote     string `json:"trusted_remote,omitempty"`
+	LastCheck         string `json:"last_check,omitempty"`
+	LastUpdate        string `json:"last_update,omitempty"`
+	LastResult        string `json:"last_result,omitempty"`
+	LastMaintenance   string `json:"last_maintenance,omitempty"`
+	MaintenanceResult string `json:"maintenance_result,omitempty"`
 }
 
 type Status struct {
-	BackendVersion string `json:"backend_version"`
-	PluginID       string `json:"plugin_id"`
-	PluginDir      string `json:"plugin_dir"`
-	Managed        string `json:"managed"`
-	AutoApply      bool   `json:"auto_apply"`
-	Remote         string `json:"remote,omitempty"`
-	TrustedRemote  string `json:"trusted_remote,omitempty"`
-	Branch         string `json:"branch,omitempty"`
-	LocalCommit    string `json:"local_commit,omitempty"`
-	RemoteCommit   string `json:"remote_commit,omitempty"`
-	Dirty          bool   `json:"dirty"`
-	Update         string `json:"update"`
-	LastCheck      string `json:"last_check,omitempty"`
-	LastUpdate     string `json:"last_update,omitempty"`
-	LastResult     string `json:"last_result,omitempty"`
+	BackendVersion    string `json:"backend_version"`
+	PluginID          string `json:"plugin_id"`
+	PluginDir         string `json:"plugin_dir"`
+	Managed           string `json:"managed"`
+	AutoApply         bool   `json:"auto_apply"`
+	AutoMaintain      bool   `json:"auto_maintain"`
+	LUGVersion        string `json:"lug_version,omitempty"`
+	WineVersion       string `json:"wine_version,omitempty"`
+	DXVKVersion       string `json:"dxvk_version,omitempty"`
+	LastMaintenance   string `json:"last_maintenance,omitempty"`
+	MaintenanceResult string `json:"maintenance_result,omitempty"`
+	Remote            string `json:"remote,omitempty"`
+	TrustedRemote     string `json:"trusted_remote,omitempty"`
+	Branch            string `json:"branch,omitempty"`
+	LocalCommit       string `json:"local_commit,omitempty"`
+	RemoteCommit      string `json:"remote_commit,omitempty"`
+	Dirty             bool   `json:"dirty"`
+	Update            string `json:"update"`
+	LastCheck         string `json:"last_check,omitempty"`
+	LastUpdate        string `json:"last_update,omitempty"`
+	LastResult        string `json:"last_result,omitempty"`
 }
 
 type App struct {
@@ -51,6 +60,9 @@ type App struct {
 	pluginDir  string
 	configDir  string
 	stateDir   string
+	dataDir    string
+	cacheDir   string
+	vendorDir  string
 	configPath string
 	logPath    string
 	libDir     string
@@ -99,6 +111,38 @@ func main() {
 		if err := app.tick(); err != nil {
 			app.logf("tick failed: %v", err)
 			os.Exit(2)
+		}
+	case "maintain":
+		if err := app.maintainGamingStack(); err != nil {
+			app.logf("maintenance failed: %v", err)
+			fatal(err)
+		}
+	case "doctor":
+		if err := app.wineDoctor(); err != nil {
+			fatal(err)
+		}
+	case "autopilot":
+		if len(args) < 2 {
+			fatal(errors.New("usage: autopilot enable|disable|status"))
+		}
+		switch args[1] {
+		case "enable":
+			if err := app.enableAutopilot(); err != nil {
+				fatal(err)
+			}
+		case "disable":
+			if err := app.disableAutopilot(); err != nil {
+				fatal(err)
+			}
+		case "status":
+			cfg := app.loadConfig()
+			if cfg.AutoMaintain {
+				fmt.Println("enabled")
+			} else {
+				fmt.Println("disabled")
+			}
+		default:
+			fatal(errors.New("usage: autopilot enable|disable|status"))
 		}
 	case "auto":
 		if len(args) < 2 {
@@ -149,11 +193,17 @@ func newApp() (*App, error) {
 	self, _ = filepath.EvalSymlinks(self)
 	configHome := envOr("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	stateHome := envOr("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	dataHome := envOr("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	cacheHome := envOr("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	dataDir := filepath.Join(dataHome, "omarchy-citizen")
 	return &App{
 		home:       home,
 		pluginDir:  filepath.Join(configHome, "omarchy", "plugins", pluginID),
 		configDir:  filepath.Join(configHome, "omarchy-citizen"),
 		stateDir:   filepath.Join(stateHome, "omarchy-citizen"),
+		dataDir:    dataDir,
+		cacheDir:   filepath.Join(cacheHome, "omarchy-citizen"),
+		vendorDir:  filepath.Join(dataDir, "vendor"),
 		configPath: filepath.Join(configHome, "omarchy-citizen", "updater.json"),
 		logPath:    filepath.Join(stateHome, "omarchy-citizen", "updater.log"),
 		libDir:     filepath.Join(home, ".local", "lib", "omarchy-citizen"),
@@ -164,16 +214,22 @@ func newApp() (*App, error) {
 func (a *App) status(fetch bool) (Status, error) {
 	cfg := a.loadConfig()
 	st := Status{
-		BackendVersion: appVersion,
-		PluginID:       pluginID,
-		PluginDir:      a.pluginDir,
-		Managed:        "manual",
-		AutoApply:      cfg.AutoApply,
-		TrustedRemote:  cfg.TrustedRemote,
-		Update:         "unavailable",
-		LastCheck:      cfg.LastCheck,
-		LastUpdate:     cfg.LastUpdate,
-		LastResult:     cfg.LastResult,
+		BackendVersion:    appVersion,
+		PluginID:          pluginID,
+		PluginDir:         a.pluginDir,
+		Managed:           "manual",
+		AutoApply:         cfg.AutoApply,
+		AutoMaintain:      cfg.AutoMaintain,
+		LUGVersion:        readMetaVersion(filepath.Join(a.vendorDir, "lug-helper", "meta.json")),
+		WineVersion:       readMetaVersion(filepath.Join(a.vendorDir, "wine", "meta.json")),
+		DXVKVersion:       readMetaVersion(filepath.Join(a.vendorDir, "dxvk", "meta.json")),
+		LastMaintenance:   cfg.LastMaintenance,
+		MaintenanceResult: cfg.MaintenanceResult,
+		TrustedRemote:     cfg.TrustedRemote,
+		Update:            "unavailable",
+		LastCheck:         cfg.LastCheck,
+		LastUpdate:        cfg.LastUpdate,
+		LastResult:        cfg.LastResult,
 	}
 
 	if !isGitRepo(a.pluginDir) {
@@ -239,20 +295,30 @@ func (a *App) status(fetch bool) (Status, error) {
 
 func (a *App) tick() error {
 	cfg := a.loadConfig()
-	if !cfg.AutoApply {
-		a.logf("tick: auto updates disabled")
-		return nil
+	var problems []string
+
+	if cfg.AutoMaintain {
+		if err := a.maintainGamingStack(); err != nil {
+			problems = append(problems, "gaming stack: "+err.Error())
+		}
 	}
-	st, err := a.status(true)
-	a.recordCheck(st, err)
-	if err != nil {
-		return err
+
+	if cfg.AutoApply {
+		st, err := a.status(true)
+		a.recordCheck(st, err)
+		if err != nil {
+			problems = append(problems, "plugin check: "+err.Error())
+		} else if st.Update == "available" {
+			if err := a.update(true); err != nil {
+				problems = append(problems, "plugin update: "+err.Error())
+			}
+		}
 	}
-	if st.Update != "available" {
-		a.logf("tick: no update applied; state=%s", st.Update)
-		return nil
+
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
 	}
-	return a.update(true)
+	return nil
 }
 
 func (a *App) update(automatic bool) error {
@@ -383,8 +449,8 @@ func (a *App) installService() error {
 	timerPath := filepath.Join(a.home, ".config", "systemd", "user", "omarchy-citizen-update.timer")
 	backendPath := filepath.Join(a.libDir, "omarchy-citizen-backend")
 
-	service := `[Unit]\nDescription=Omarchy Citizen automatic plugin updater\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=` + backendPath + ` tick\n`
-	timer := `[Unit]\nDescription=Check Omarchy Citizen updates periodically\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=6h\nRandomizedDelaySec=15min\nPersistent=true\nUnit=omarchy-citizen-update.service\n\n[Install]\nWantedBy=timers.target\n`
+	service := `[Unit]\nDescription=Omarchy Citizen Autopilot maintenance\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nExecStart=` + backendPath + ` tick\n`
+	timer := `[Unit]\nDescription=Maintain Omarchy Citizen gaming stack automatically\n\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=6h\nRandomizedDelaySec=15min\nPersistent=true\nUnit=omarchy-citizen-update.service\n\n[Install]\nWantedBy=timers.target\n`
 
 	if err := os.WriteFile(servicePath, []byte(strings.ReplaceAll(service, `\n`, "\n")), 0o644); err != nil {
 		return err
@@ -655,6 +721,12 @@ func printStatusKV(s Status) {
 	fmt.Printf("backend_version=%s\n", s.BackendVersion)
 	fmt.Printf("managed=%s\n", s.Managed)
 	fmt.Printf("auto_apply=%t\n", s.AutoApply)
+	fmt.Printf("auto_maintain=%t\n", s.AutoMaintain)
+	fmt.Printf("lug_version=%s\n", s.LUGVersion)
+	fmt.Printf("wine_version=%s\n", s.WineVersion)
+	fmt.Printf("dxvk_version=%s\n", s.DXVKVersion)
+	fmt.Printf("last_maintenance=%s\n", s.LastMaintenance)
+	fmt.Printf("maintenance_result=%s\n", s.MaintenanceResult)
 	fmt.Printf("update=%s\n", s.Update)
 	fmt.Printf("remote=%s\n", s.Remote)
 	fmt.Printf("trusted_remote=%s\n", s.TrustedRemote)

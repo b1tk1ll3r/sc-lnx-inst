@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.6.4"
+  property string pluginVersion: "0.7.0"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -34,6 +34,11 @@ Panel {
   property string pluginUpdate: "unavailable"
   property string pluginLocalCommit: ""
   property string pluginRemoteCommit: ""
+  property string autopilot: "false"
+  property string managedLUGVersion: ""
+  property string managedWineVersion: ""
+  property string managedDXVKVersion: ""
+  property string maintenanceResult: ""
   property string actionStatus: ""
   property string actionError: ""
   property string actionKind: ""
@@ -97,7 +102,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.6.4"
+    pluginVersion = values.plugin_version || "0.7.0"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -117,6 +122,11 @@ Panel {
     pluginUpdate = values.plugin_update || "unavailable"
     pluginLocalCommit = values.plugin_local_commit || ""
     pluginRemoteCommit = values.plugin_remote_commit || ""
+    autopilot = values.autopilot || "false"
+    managedLUGVersion = values.managed_lug_version || ""
+    managedWineVersion = values.managed_wine_version || ""
+    managedDXVKVersion = values.managed_dxvk_version || ""
+    maintenanceResult = values.maintenance_result || ""
   }
 
   function stateIcon(state) {
@@ -160,6 +170,7 @@ Panel {
   }
 
   function headline() {
+    if (health === "ready" && root.autopilot === "true") return "FLIGHT READY · AUTOPILOT"
     if (health === "ready") return "FLIGHT READY"
     if (health === "recover-prefix") return "SETUP REPAIR"
     if (health === "repair") return "REPAIR AVAILABLE"
@@ -523,9 +534,10 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Version " + root.pluginVersion + " · LUG " +
-                (root.helperVersion !== "" ? root.helperVersion : "nicht eingerichtet") +
-                " · Plugin: " + (root.pluginManaged === "git" ? (root.pluginAuto === "true" ? "Auto" : "Git") : "ZIP")
+              text: "Version " + root.pluginVersion +
+                " · Autopilot " + (root.autopilot === "true" ? "AKTIV" : "aus") +
+                " · LUG " + (root.managedLUGVersion !== "" ? root.managedLUGVersion : "—") +
+                " · Wine " + (root.managedWineVersion !== "" ? root.managedWineVersion : "—")
               color: root.muted
               font.family: root.uiFont
               font.pixelSize: Style.font.caption
@@ -598,6 +610,26 @@ Panel {
             }
 
             PanelSeparator { foreground: root.barForeground }
+
+            StatusLine {
+              label: "Autopilot"
+              state: root.autopilot === "true" ? "ready" : "warning"
+              value: root.autopilot === "true"
+                ? "aktiv · Wartung alle 6 Stunden"
+                : "nicht aktiviert"
+            }
+
+            StatusLine {
+              label: "Managed Wine"
+              state: root.managedWineVersion !== "" ? "ready" : "unknown"
+              value: root.managedWineVersion !== "" ? root.managedWineVersion : "wird beim Setup geladen"
+            }
+
+            StatusLine {
+              label: "Managed DXVK"
+              state: root.managedDXVKVersion !== "" ? "ready" : "unknown"
+              value: root.managedDXVKVersion !== "" ? root.managedDXVKVersion : "nach Prefix-Setup"
+            }
 
             Text {
               text: "PLUGIN-UPDATES"
@@ -699,11 +731,11 @@ Panel {
 
               Button {
                 width: setupGrid.cellWidth
-                text: "LUG aktualisieren"
+                text: "Gaming-Stack aktualisieren"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.runAction("update-helper")
+                onClicked: root.runAction("autopilot-maintain")
               }
 
               Button {
@@ -726,11 +758,11 @@ Panel {
 
               Button {
                 width: setupGrid.cellWidth
-                text: "Wine-Runner"
+                text: "Wine-Selbsttest"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.runAction("runners")
+                onClicked: root.runAction("wine-doctor")
               }
 
               Button {
