@@ -51,6 +51,9 @@ omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || true
 omarchy bar move "$PLUGIN_ID" --section right >/dev/null 2>&1 || true
 
+# QML hot-reload is currently unreliable for third-party bar plugins.
+omarchy restart shell >/dev/null 2>&1 || true
+
 message "Omarchy Citizen" "Installation abgeschlossen.
 
 Oben in der Omarchy-Leiste findest du jetzt ✦SC.

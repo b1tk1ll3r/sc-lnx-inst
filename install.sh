@@ -40,8 +40,11 @@ echo "Aktiviere Plugin..."
 
 omarchy plugin enable "$PLUGIN_ID"
 
+# QML hot-reload is currently unreliable for third-party bar plugins.
+omarchy restart shell >/dev/null 2>&1 || true
+
 echo
-echo "Omarchy Citizen 0.6.0 wurde installiert:"
+echo "Omarchy Citizen 0.6.1 wurde installiert:"
 echo "  $DEST"
 echo
 echo "Links-Klick auf 'SC' in der Omarchy-Leiste öffnet das Star-Citizen-Panel."

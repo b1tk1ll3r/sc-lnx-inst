@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.6.0"
+  property string pluginVersion: "0.6.1"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -33,6 +33,10 @@ Panel {
   property string pluginUpdate: "unavailable"
   property string pluginLocalCommit: ""
   property string pluginRemoteCommit: ""
+  property string actionStatus: ""
+  property string actionError: ""
+  property string actionKind: ""
+  property bool actionCloseOnSuccess: true
 
   readonly property color accent: "#56d2ff"
   readonly property color accentSoft: "#1c3444"
@@ -60,11 +64,15 @@ Panel {
   }
 
   function runAction(action, closePanel) {
-    if (!root.bar) return
-    root.bar.run(
-      "bash " + root.bar.shellQuote(root.controlScript) + " " + root.bar.shellQuote(action)
-    )
-    if (closePanel !== false) root.close()
+    if (actionProc.running) return
+
+    root.actionKind = String(action || "")
+    root.actionCloseOnSuccess = closePanel !== false
+    root.actionError = ""
+    root.actionStatus = "Aktion wird gestartet…"
+
+    actionProc.command = ["bash", root.controlScript, root.actionKind]
+    actionProc.running = true
   }
 
   function refreshStatus() {
@@ -87,7 +95,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.5.0"
+    pluginVersion = values.plugin_version || "0.6.1"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -188,6 +196,52 @@ Panel {
     }
   }
 
+  Process {
+    id: actionProc
+    running: false
+    command: []
+
+    stdout: StdioCollector {
+      id: actionOut
+      waitForEnd: true
+    }
+
+    stderr: StdioCollector {
+      id: actionErr
+      waitForEnd: true
+    }
+
+    onStarted: {
+      root.actionStatus = root.actionKind === "primary"
+        ? "Setup/Start wird vorbereitet…"
+        : "Aktion wird ausgeführt…"
+    }
+
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.actionError = ""
+        root.actionStatus = "Gestartet."
+        root.refreshStatus()
+
+        if (root.actionCloseOnSuccess)
+          closeAfterAction.restart()
+      } else {
+        var detail = String(actionErr.text || "").trim()
+        root.actionStatus = ""
+        root.actionError = detail !== ""
+          ? detail
+          : "Die Aktion konnte nicht gestartet werden. Bitte erstelle ein Support-Paket."
+      }
+    }
+  }
+
+  Timer {
+    id: closeAfterAction
+    interval: 350
+    repeat: false
+    onTriggered: root.close()
+  }
+
   Timer {
     interval: 10000
     repeat: true
@@ -286,12 +340,47 @@ Panel {
 
             Button {
               width: parent.width
-              text: root.primaryText()
+              text: actionProc.running
+                ? "…  WIRD GESTARTET"
+                : root.primaryText()
               foreground: root.barForeground
               fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               bordered: true
-              active: root.health === "ready"
+              active: root.health === "ready" || actionProc.running
               onClicked: root.runAction(root.health === "repair" ? "repair" : "primary")
+            }
+
+            Text {
+              visible: root.actionStatus !== ""
+              width: parent.width
+              text: root.actionStatus
+              color: root.accent
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+              visible: root.actionError !== ""
+              width: parent.width
+              radius: 10
+              color: Qt.rgba(root.danger.r, root.danger.g, root.danger.b, 0.10)
+              border.color: root.danger
+              border.width: 1
+              implicitHeight: actionErrorText.implicitHeight + Style.space(16)
+
+              Text {
+                id: actionErrorText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(8)
+                text: root.actionError
+                color: root.danger
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
             }
           }
         }

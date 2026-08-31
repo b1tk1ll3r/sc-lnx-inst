@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.6.0 – Plug-&-Play-Installation
+# Omarchy Citizen 0.6.1 – Plug-&-Play-Installation
 
 ## Ziel
 
@@ -273,3 +273,19 @@ Wenn ein Nutzer ein Problem meldet, kannst du ihn bitten:
 
 Damit brauchst du im ersten Supportkontakt normalerweise keine Terminalbefehle
 vom Nutzer anzufordern.
+
+
+## Hotfix 0.6.1 – Setup-Button
+
+Version 0.6.1 ändert die Ausführung der Panel-Aktionen grundlegend.
+
+Beim Klick auf **EINRICHTEN & STARTKLAR MACHEN** wird die Aktion nun direkt als
+Quickshell-Prozess gestartet. Das Panel zeigt sofort **WIRD GESTARTET**.
+
+Wenn der Start fehlschlägt, bleibt das Panel offen und zeigt den Fehler an.
+Außerdem wird der fehlgeschlagene Terminalstart in
+`~/.local/state/omarchy-citizen/omarchy-citizen.log` protokolliert und landet
+im Support-Paket.
+
+Nach der Installation wird der Omarchy-Shellprozess einmal neu gestartet, damit
+die neue QML-Version sicher aktiv ist.

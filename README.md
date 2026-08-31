@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.6.0
+# Omarchy Citizen 0.6.1
 
 A plug-and-play Star Citizen control panel for Omarchy.
 
@@ -68,3 +68,12 @@ hours. The Git `origin` present when auto-update is enabled is pinned as the tru
 remote; unattended updates stop if that remote changes or the checkout is dirty.
 
 See [`backend/README.md`](backend/README.md) and [`GIT_DISTRIBUTION.md`](GIT_DISTRIBUTION.md).
+
+
+## 0.6.1 hotfix
+
+- primary/setup actions now run through a Quickshell `Process` instead of fire-and-forget `bar.run`
+- the panel shows `WIRD GESTARTET` immediately after a click
+- startup failures stay visible in the panel instead of silently closing it
+- terminal launch has a monitored fallback path and logs immediate launcher failures
+- installers restart the Omarchy shell after QML changes to avoid stale third-party plugin QML

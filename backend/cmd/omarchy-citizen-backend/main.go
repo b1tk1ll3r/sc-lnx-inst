@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	appVersion = "0.6.0"
+	appVersion = "0.6.1"
 	pluginID   = "local.omarchy-citizen"
 )
 
@@ -318,6 +318,12 @@ func (a *App) update(automatic bool) error {
 		a.logf("backend self-sync warning: %v", err)
 	}
 	_ = run("", "omarchy-shell", "shell", "rescanPlugins")
+	if !automatic {
+		// Current Omarchy releases can keep stale third-party bar QML after a rescan.
+		// A user-triggered update may safely request a full shell restart so the
+		// freshly validated plugin code becomes active immediately.
+		_ = run("", "omarchy", "restart", "shell")
+	}
 	return nil
 }
 
