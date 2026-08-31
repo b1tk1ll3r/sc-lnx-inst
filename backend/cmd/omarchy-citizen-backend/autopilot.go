@@ -30,6 +30,7 @@ type githubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	Digest             string `json:"digest,omitempty"`
 }
 
 type componentMeta struct {
@@ -100,13 +101,16 @@ func (a *App) maintainGamingStack() error {
 	var problems []string
 
 	if err := a.syncLUGHelper(); err != nil {
-		problems = append(problems, "LUG Helper: "+err.Error())
+		a.logf("optional LUG Helper sync warning: %v", err)
 	}
 	if err := a.syncWineRunner(); err != nil {
 		problems = append(problems, "Wine runner: "+err.Error())
 	}
 	if err := a.syncDXVK(); err != nil {
 		problems = append(problems, "DXVK: "+err.Error())
+	}
+	if err := a.syncRSILauncherIfNeeded(); err != nil {
+		problems = append(problems, "RSI Launcher: "+err.Error())
 	}
 
 	result := "ok"
@@ -152,6 +156,10 @@ func (a *App) syncLUGHelper() error {
 	}
 	tmp := target + ".new"
 	if err := download(asset.BrowserDownloadURL, tmp); err != nil {
+		return err
+	}
+	if err := verifyReleaseDigest(tmp, asset.Digest); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
@@ -230,6 +238,11 @@ func (a *App) syncWineRunner() error {
 		archive := filepath.Join(a.cacheDir, "wine-"+release.TagName+"-"+filepath.Base(asset.Name))
 		if err := download(asset.BrowserDownloadURL, archive); err != nil {
 			failures = append(failures, release.TagName+" download: "+err.Error())
+			continue
+		}
+		if err := verifyReleaseDigest(archive, asset.Digest); err != nil {
+			_ = os.Remove(archive)
+			failures = append(failures, release.TagName+" checksum: "+err.Error())
 			continue
 		}
 
@@ -527,6 +540,10 @@ func (a *App) syncDXVK() error {
 	if err := download(asset.BrowserDownloadURL, archive); err != nil {
 		return err
 	}
+	if err := verifyReleaseDigest(archive, asset.Digest); err != nil {
+		_ = os.Remove(archive)
+		return err
+	}
 	stage, err := os.MkdirTemp(a.cacheDir, "dxvk-stage-")
 	if err != nil {
 		return err
@@ -593,12 +610,7 @@ func installDLLDir(srcDir, dstDir, backup string) error {
 }
 
 func (a *App) configuredPrefix() string {
-	configHome := envOr("XDG_CONFIG_HOME", filepath.Join(a.home, ".config"))
-	data, err := os.ReadFile(filepath.Join(configHome, "starcitizen-lug", "winedir.conf"))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
+	return a.loadGameConfig().Prefix
 }
 
 func prefixInitialized(prefix string) bool {
@@ -894,4 +906,23 @@ func (a *App) acquireMaintenanceLock() (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil
+}
+
+func verifyReleaseDigest(path, digest string) error {
+	if digest == "" {
+		return nil
+	}
+	parts := strings.SplitN(digest, ":", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "sha256" {
+		return nil
+	}
+	want := strings.ToLower(strings.TrimSpace(parts[1]))
+	got, err := fileHash(path)
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(got) != want {
+		return fmt.Errorf("SHA-256 mismatch for %s", filepath.Base(path))
+	}
+	return nil
 }

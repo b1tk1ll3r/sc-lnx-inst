@@ -2,7 +2,7 @@
 set -u
 
 PLUGIN_ID="local.omarchy-citizen"
-PLUGIN_VERSION="0.7.1"
+PLUGIN_VERSION="0.8.0"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starcitizen-lug"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -58,408 +58,70 @@ find_backend() {
 }
 
 backend_status() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || return 1
-  "$backend" status
-}
+  local game_output="" plugin_output="" health="setup" prefix_state="missing" launcher_state="missing" game_state="missing"
+  local wine_version="" dxvk_version="" lug_version="" hardware="unknown" hardware_reason="" gpu="" vulkan="unknown"
 
-autopilot_enable() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || {
-    echo "Omarchy-Citizen-Backend fehlt." >&2
-    return 1
-  }
-  "$backend" autopilot enable
-}
-
-autopilot_maintain() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || return 1
-  "$backend" maintain
-}
-
-wine_doctor() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || return 1
-  "$backend" doctor
-}
-
-plugin_update_check() {
-  local backend output state
-  backend="$(find_backend 2>/dev/null)" || {
-    notify_error "Das Omarchy-Citizen-Update-Backend wurde nicht gefunden. Installiere das Plugin erneut."
-    return 1
-  }
-  output="$($backend check 2>&1)" || true
-  printf '%s\n' "$output" >> "$LOG_FILE"
-  state="$(printf '%s\n' "$output" | sed -n 's/^update=//p' | head -n1)"
-  case "$state" in
-    available) notify "Omarchy Citizen" "Ein Plugin-Update ist verfügbar." ;;
-    current) notify "Omarchy Citizen" "Omarchy Citizen ist aktuell." ;;
-    unavailable) notify "Omarchy Citizen" "Diese Installation ist noch nicht Git-verwaltet. Automatische Plugin-Updates werden nach der Git-Installation verfügbar." ;;
-    blocked-dirty) notify_error "Plugin-Update blockiert: Im Plugin-Verzeichnis gibt es lokale Änderungen." ;;
-    blocked-remote-changed) notify_error "Plugin-Update aus Sicherheitsgründen blockiert: Das Git-Remote hat sich geändert." ;;
-    *) notify_error "Plugin-Update konnte nicht eindeutig geprüft werden. Das Support-Paket enthält Details." ;;
-  esac
-}
-
-plugin_update_now() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || {
-    notify_error "Das Update-Backend wurde nicht gefunden."
-    return 1
-  }
-  if "$backend" update >>"$LOG_FILE" 2>&1; then
-    notify "Omarchy Citizen" "Plugin-Update abgeschlossen."
-  else
-    notify_error "Plugin-Update fehlgeschlagen oder nicht verfügbar. Erstelle bei Bedarf ein Support-Paket."
-  fi
-}
-
-plugin_auto_enable() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || { notify_error "Update-Backend fehlt."; return 1; }
-  if "$backend" auto enable >>"$LOG_FILE" 2>&1; then
-    notify "Omarchy Citizen" "Automatische Plugin-Updates sind aktiviert."
-  else
-    notify_error "Auto-Updates konnten nicht aktiviert werden. Bei ZIP-Installationen ist zuerst eine Git-verwaltete Plugin-Installation nötig."
-  fi
-}
-
-plugin_auto_disable() {
-  local backend
-  backend="$(find_backend 2>/dev/null)" || { notify_error "Update-Backend fehlt."; return 1; }
-  "$backend" auto disable >>"$LOG_FILE" 2>&1 || true
-  notify "Omarchy Citizen" "Automatische Plugin-Updates sind deaktiviert."
-}
-
-open_updater_log() {
-  local log="$STATE_DIR/updater.log"
-  if [[ ! -f "$log" ]]; then
-    notify_error "Noch kein Updater-Log vorhanden."
-    return 1
-  fi
-  xdg-open "$log" >/dev/null 2>&1 &
-}
-
-notify() {
-  local title="$1"
-  local message="$2"
-  if command -v omarchy-notification-send >/dev/null 2>&1; then
-    omarchy-notification-send "$title" "$message" >/dev/null 2>&1 || true
-  elif command -v notify-send >/dev/null 2>&1; then
-    notify-send "$title" "$message" >/dev/null 2>&1 || true
-  fi
-}
-
-notify_error() {
-  local message="$1"
-  log_line "error=$message"
-  if command -v zenity >/dev/null 2>&1; then
-    zenity --error --width=500 --title="Omarchy Citizen" --text="$message" >/dev/null 2>&1 &
-  else
-    notify "Omarchy Citizen" "$message"
-    printf 'Omarchy Citizen: %s\n' "$message" >&2
-  fi
-}
-
-find_helper() {
-  local candidate
-
-  # Omarchy Citizen owns this copy and keeps it current automatically.
-  if [[ -x "$MANAGED_LUG" ]]; then
-    printf '%s\n' "$MANAGED_LUG"
-    return 0
-  fi
-
-  # Compatibility fallbacks for existing users.
-  if command -v lug-helper >/dev/null 2>&1; then
-    command -v lug-helper
-    return 0
-  fi
-  if command -v lug-helper.sh >/dev/null 2>&1; then
-    command -v lug-helper.sh
-    return 0
-  fi
-
-  for candidate in \
-    "$HOME/.local/bin/lug-helper" \
-    "$HOME/.local/bin/lug-helper.sh" \
-    "$DATA_DIR/lug-helper/lug-helper.sh"
-  do
-    [[ -f "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
-  done
-  return 1
-}
-
-helper_exec() {
-  local helper="$1"
-  shift
-
-  if [[ "$helper" == "$MANAGED_LUG" || "${helper,,}" == *.appimage ]]; then
-    APPIMAGE_EXTRACT_AND_RUN=1 "$helper" "$@"
-  elif [[ "$helper" == *.sh ]]; then
-    bash "$helper" "$@"
-  else
-    "$helper" "$@"
-  fi
-}
-
-helper_version() {
-  local helper="$1"
-  APPIMAGE_EXTRACT_AND_RUN=1 "$helper" --version 2>/dev/null | head -n1 || true
-}
-run_helper_sync() {
-  local helper
-  helper="$(find_helper)" || {
-    notify_error "Der Star Citizen LUG Helper wurde nicht gefunden."
-    return 1
-  }
-
-  log_line "lug-helper sync args=$* helper=$helper"
-  helper_exec "$helper" "$@" >>"$LOG_FILE" 2>&1
-}
-
-run_helper_visible() {
-  local helper
-  helper="$(find_helper)" || {
-    echo "Der Star Citizen LUG Helper wurde nicht gefunden." >&2
-    return 1
-  }
-
-  log_line "lug-helper visible args=$* helper=$helper"
-  helper_exec "$helper" "$@"
-}
-
-run_helper_gui() {
-  local helper
-  helper="$(find_helper)" || {
-    notify_error "Der Star Citizen LUG Helper wurde nicht gefunden.
-
-Wähle im SC-Panel „Einrichten“ – Omarchy Citizen installiert die benötigten Komponenten."
-    return 1
-  }
-
-  log_line "lug-helper gui args=$* helper=$helper"
-  if [[ "$helper" == "$MANAGED_LUG" || "${helper,,}" == *.appimage ]]; then
-    nohup env APPIMAGE_EXTRACT_AND_RUN=1 "$helper" "$@" >>"$LOG_FILE" 2>&1 &
-  elif [[ "$helper" == *.sh ]]; then
-    nohup bash "$helper" "$@" >>"$LOG_FILE" 2>&1 &
-  else
-    nohup "$helper" "$@" >>"$LOG_FILE" 2>&1 &
-  fi
-}
-
-configured_prefix() {
-  [[ -f "$WINE_CONF" ]] || return 1
-  local prefix
-  IFS= read -r prefix < "$WINE_CONF"
-  [[ -n "$prefix" ]] || return 1
-  printf '%s\n' "$prefix"
-}
-
-prefix_is_initialized() {
-  local prefix="$1"
-  [[ -d "$prefix/drive_c" ]] &&
-  [[ -f "$prefix/system.reg" ]] &&
-  [[ -f "$prefix/user.reg" ]]
-}
-
-read_prefix() {
-  local prefix
-  prefix="$(configured_prefix 2>/dev/null)" || return 1
-  [[ -d "$prefix" ]] || return 1
-  prefix_is_initialized "$prefix" || return 1
-  printf '%s\n' "$prefix"
-}
-
-find_incomplete_prefix() {
-  local prefix=""
-
-  prefix="$(configured_prefix 2>/dev/null || true)"
-  if [[ -n "$prefix" && -d "$prefix" ]] && ! prefix_is_initialized "$prefix"; then
-    printf '%s\n' "$prefix"
-    return 0
-  fi
-
-  prefix="$HOME/Games/star-citizen"
-  if [[ -d "$prefix" ]] && ! prefix_is_initialized "$prefix"; then
-    # Only treat the default path as our incomplete prefix when it contains
-    # LUG/installation artifacts rather than an arbitrary empty user folder.
-    if [[ -d "$prefix/runners" || -f "$prefix/sc-launch.sh" || -f "$prefix/.lughelper" ]]; then
-      printf '%s\n' "$prefix"
-      return 0
-    fi
-  fi
-
-  return 1
-}
-
-read_game_dir() {
-  [[ -f "$GAME_CONF" ]] || return 1
-  local game_dir
-  IFS= read -r game_dir < "$GAME_CONF"
-  [[ -n "$game_dir" ]] || return 1
-  printf '%s\n' "$game_dir"
-}
-
-package_installed() {
-  pacman -Qq "$1" >/dev/null 2>&1
-}
-
-installed_lug_version() {
-  pacman -Q lug-helper 2>/dev/null | awk '{print $2}'
-}
-
-read_update_cache() {
-  local key="$1"
-  [[ -f "$UPDATE_CACHE" ]] || return 1
-  sed -n "s/^${key}=//p" "$UPDATE_CACHE" | head -n 1
-}
-
-write_update_cache() {
-  local state="$1"
-  local version="${2:-}"
-  mkdir -p "$CACHE_DIR"
-  {
-    printf 'state=%s\n' "$state"
-    printf 'version=%s\n' "$version"
-    printf 'checked_at=%s\n' "$(date +%s)"
-  } > "$UPDATE_CACHE"
-}
-
-check_update() {
-  local installed output rc line target=""
-
-  if ! package_installed lug-helper; then
-    write_update_cache "not-installed" ""
-    printf 'not-installed\n'
-    return 0
-  fi
-
-  installed="$(installed_lug_version)"
-
-  if ! command -v yay >/dev/null 2>&1; then
-    write_update_cache "unknown" ""
-    printf 'unknown\n'
-    return 1
-  fi
-
-  set +e
-  output="$(timeout 25s yay -Qua 2>/dev/null)"
-  rc=$?
-  set -e
-
-  if (( rc != 0 )); then
-    write_update_cache "unknown" ""
-    printf 'unknown\n'
-    return 1
-  fi
-
-  line="$(printf '%s\n' "$output" | awk '$1=="lug-helper"{print; exit}')"
-  if [[ -n "$line" ]]; then
-    target="$(printf '%s\n' "$line" | awk '{print $NF}')"
-    write_update_cache "available" "$target"
-    printf 'available=%s\n' "$target"
-  else
-    write_update_cache "current" "$installed"
-    printf 'current=%s\n' "$installed"
-  fi
-}
-
-status() {
-  local helper="" version="" prefix="" game_dir="" dep missing_deps=""
-  local helper_state="missing" helper_managed="missing" deps_state="ready"
-  local prefix_state="missing" prefix_detail="" launcher_state="missing" game_state="missing"
-  local update_state="unknown" update_version="" health="setup"
-
-  # Core operation no longer depends on an AUR LUG package. The managed
-  # official LUG AppImage bundles its GUI/runtime dependencies.
-  if [[ ! -x "$MANAGED_LUG" ]]; then
-    deps_state="partial"
-    missing_deps="managed LUG AppImage"
-  fi
-
-  if helper="$(find_helper 2>/dev/null)"; then
-    helper_state="ready"
-    if [[ "$helper" == "$MANAGED_LUG" ]]; then
-      helper_managed="autopilot"
-    elif package_installed lug-helper; then
-      helper_managed="aur"
-    else
-      helper_managed="external"
-    fi
-    version="$(helper_version "$helper")"
-    version="${version//$'\n'/ }"
-    version="${version//$'\r'/ }"
-  fi
-
-  update_state="$(read_update_cache state 2>/dev/null || printf 'unknown')"
-  update_version="$(read_update_cache version 2>/dev/null || true)"
-
-  if prefix="$(read_prefix 2>/dev/null)"; then
-    prefix_state="ready"
-    prefix_detail="initialisiert"
-    if [[ -f "$prefix/sc-launch.sh" ]]; then
-      launcher_state="ready"
-    fi
-  elif prefix="$(find_incomplete_prefix 2>/dev/null)"; then
-    prefix_state="partial"
-    prefix_detail="unvollständig"
-  fi
-
-  if game_dir="$(read_game_dir 2>/dev/null)"; then
-    if [[ -f "$game_dir/LIVE/Bin64/StarCitizen.exe" ]]; then
-      game_state="ready"
-    elif [[ -d "$game_dir" ]]; then
-      game_state="partial"
-    fi
-  fi
-
-  if [[ "$helper_state" != "ready" ]]; then
-    health="setup"
-  elif [[ "$prefix_state" == "partial" ]]; then
-    health="recover-prefix"
-  elif [[ "$prefix_state" != "ready" ]]; then
-    health="install"
-  elif [[ "$launcher_state" != "ready" ]]; then
-    health="repair"
-  elif [[ "$game_state" != "ready" ]]; then
-    health="install-game"
-  else
-    health="ready"
+  if game_output="$(backend_game_status 2>/dev/null)"; then
+    health="$(printf '%s\n' "$game_output" | sed -n 's/^health=//p' | head -n1)"
+    prefix_state="$(printf '%s\n' "$game_output" | sed -n 's/^prefix_state=//p' | head -n1)"
+    launcher_state="$(printf '%s\n' "$game_output" | sed -n 's/^launcher_state=//p' | head -n1)"
+    game_state="$(printf '%s\n' "$game_output" | sed -n 's/^game_state=//p' | head -n1)"
+    wine_version="$(printf '%s\n' "$game_output" | sed -n 's/^wine_version=//p' | head -n1)"
+    dxvk_version="$(printf '%s\n' "$game_output" | sed -n 's/^dxvk_version=//p' | head -n1)"
+    lug_version="$(printf '%s\n' "$game_output" | sed -n 's/^lug_version=//p' | head -n1)"
+    hardware="$(printf '%s\n' "$game_output" | sed -n 's/^hardware=//p' | head -n1)"
+    hardware_reason="$(printf '%s\n' "$game_output" | sed -n 's/^hardware_reason=//p' | head -n1)"
+    gpu="$(printf '%s\n' "$game_output" | sed -n 's/^gpu=//p' | head -n1)"
+    vulkan="$(printf '%s\n' "$game_output" | sed -n 's/^vulkan=//p' | head -n1)"
   fi
 
   printf 'plugin_version=%s\n' "$PLUGIN_VERSION"
-  printf 'health=%s\n' "$health"
-  printf 'deps=%s\n' "$deps_state"
-  printf 'deps_missing=%s\n' "$missing_deps"
-  printf 'helper=%s\n' "$helper_state"
-  printf 'helper_managed=%s\n' "$helper_managed"
-  printf 'helper_version=%s\n' "$version"
-  printf 'update=%s\n' "$update_state"
-  printf 'update_version=%s\n' "$update_version"
-  printf 'prefix=%s\n' "$prefix_state"
-  printf 'prefix_detail=%s\n' "$prefix_detail"
-  printf 'launcher=%s\n' "$launcher_state"
-  printf 'game=%s\n' "$game_state"
+  printf 'health=%s\n' "${health:-setup}"
+  printf 'deps=ready\n'
+  printf 'deps_missing=\n'
+  printf 'helper=%s\n' "$([[ -n "$lug_version" ]] && echo ready || echo missing)"
+  printf 'helper_managed=autopilot\n'
+  printf 'helper_version=%s\n' "$lug_version"
+  printf 'update=unknown\n'
+  printf 'update_version=\n'
+  printf 'prefix=%s\n' "${prefix_state:-missing}"
+  if [[ "$prefix_state" == "partial" ]]; then printf 'prefix_detail=unvollständig\n'; else printf 'prefix_detail=\n'; fi
+  printf 'launcher=%s\n' "${launcher_state:-missing}"
+  printf 'game=%s\n' "${game_state:-missing}"
+  printf 'hardware=%s\n' "$hardware"
+  printf 'hardware_reason=%s\n' "$hardware_reason"
+  printf 'hardware_gpu=%s\n' "$gpu"
+  printf 'hardware_vulkan=%s\n' "$vulkan"
 
-  local backend_output="" backend_state="missing"
-  if backend_output="$(backend_status 2>/dev/null)"; then
-    backend_state="ready"
+  if plugin_output="$(backend_status 2>/dev/null)"; then
+    printf 'backend=ready\n'
+  else
+    printf 'backend=missing\n'
   fi
-  printf 'backend=%s\n' "$backend_state"
-  printf 'backend_version=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^backend_version=//p' | head -n1)"
-  printf 'plugin_managed=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^managed=//p' | head -n1)"
-  printf 'plugin_auto=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^auto_apply=//p' | head -n1)"
-  printf 'plugin_update=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^update=//p' | head -n1)"
-  printf 'plugin_local_commit=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^local_commit=//p' | head -n1)"
-  printf 'plugin_remote_commit=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^remote_commit=//p' | head -n1)"
-  printf 'autopilot=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^auto_maintain=//p' | head -n1)"
-  printf 'managed_lug_version=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^lug_version=//p' | head -n1)"
-  printf 'managed_wine_version=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^wine_version=//p' | head -n1)"
-  printf 'managed_dxvk_version=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^dxvk_version=//p' | head -n1)"
-  printf 'maintenance_result=%s\n' "$(printf '%s\n' "$backend_output" | sed -n 's/^maintenance_result=//p' | head -n1)"
+  printf 'backend_version=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^backend_version=//p' | head -n1)"
+  printf 'plugin_managed=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^managed=//p' | head -n1)"
+  printf 'plugin_auto=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^auto_apply=//p' | head -n1)"
+  printf 'plugin_update=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^update=//p' | head -n1)"
+  printf 'plugin_local_commit=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^local_commit=//p' | head -n1)"
+  printf 'plugin_remote_commit=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^remote_commit=//p' | head -n1)"
+  printf 'autopilot=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^auto_maintain=//p' | head -n1)"
+  printf 'managed_lug_version=%s\n' "${lug_version}"
+  printf 'managed_wine_version=%s\n' "${wine_version}"
+  printf 'managed_dxvk_version=%s\n' "${dxvk_version}"
+  printf 'maintenance_result=%s\n' "$(printf '%s\n' "$plugin_output" | sed -n 's/^maintenance_result=//p' | head -n1)"
+}
+
+hardware_info() {
+  local out reason gpu vulkan
+  out="$(backend_game_status 2>/dev/null || true)"
+  reason="$(printf '%s\n' "$out" | sed -n 's/^hardware_reason=//p')"
+  gpu="$(printf '%s\n' "$out" | sed -n 's/^gpu=//p')"
+  vulkan="$(printf '%s\n' "$out" | sed -n 's/^vulkan=//p')"
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --warning --width=600 --title="Omarchy Citizen – Hardware" --text="<b>Star Citizen ist auf diesem System noch nicht spielbereit.</b>\n\nGPU:\n${gpu:-nicht erkannt}\n\nVulkan: ${vulkan:-unbekannt}\n\n${reason:-Hardware-Prüfung fehlgeschlagen.}" >/dev/null 2>&1 || true
+  else
+    printf '%s\n' "$reason"
+  fi
 }
 
 probe_detached_start() {
@@ -700,11 +362,7 @@ guided_setup_interactive() {
 }
 
 guided_setup() {
-  if ! package_installed zenity || ! find_helper >/dev/null 2>&1; then
-    launch_terminal_action install-stack-terminal
-    return
-  fi
-  guided_setup_interactive
+  launch_terminal_action install-stack-terminal
 }
 
 install_stack_terminal() {
@@ -720,81 +378,53 @@ install_stack_terminal() {
     echo "=================================================="
     echo
     echo "Fehlercode: $rc"
-    echo "Omarchy Citizen hat alle Ausgaben im Debug-Log gespeichert."
-    echo "Im SC-Panel genügt „Support-Paket erstellen“."
-    echo
-    log_line "autopilot setup failed rc=$rc"
-    notify "Omarchy Citizen" "Setup fehlgeschlagen. Support-Paket kann mit einem Klick erstellt werden."
-    if [[ -t 0 ]]; then
-      read -r -p "Drücke Enter, um dieses Fenster zu schließen … " _ || true
-    fi
+    echo "Im SC-Panel kannst du mit einem Klick ein Support-Paket erstellen."
+    log_line "owned-stack setup failed rc=$rc"
+    notify "Omarchy Citizen" "Setup fehlgeschlagen. Bitte Support-Paket erstellen."
+    if [[ -t 0 ]]; then read -r -p "Drücke Enter zum Schließen … " _ || true; fi
     exit "$rc"
   }
   trap setup_failed ERR
 
   echo
   echo "=================================================="
-  echo " Omarchy Citizen – Rundum-Sorglos Autopilot"
+  echo " Omarchy Citizen – Spielbereit machen"
   echo "=================================================="
   echo
-  echo "Das Plugin verwaltet jetzt selbst:"
-  echo "  ✓ Omarchy-Citizen-Updates (bei Git-Installation)"
-  echo "  ✓ offiziellen LUG Helper als AppImage"
-  echo "  ✓ stabilen LUG-Wine-Runner"
-  echo "  ✓ DXVK"
-  echo "  ✓ Wine-Selbsttest vor Aktivierung"
-  echo "  ✓ Reparatur- und Support-Logs"
-  echo
-  echo "Es wird kein AUR-LUG-Paket mehr benötigt."
+  echo "Omarchy Citizen verwaltet den kritischen Gaming-Stack jetzt selbst."
+  echo "Der LUG Helper entscheidet nicht mehr, welche Wine-Version installiert wird."
   echo
 
-  echo "Aktiviere Autopilot und synchronisiere den Gaming-Stack …"
-  autopilot_enable
-
-  echo
-  echo "Prüfe den verwalteten Wine-Runner in einem temporären Test-Prefix …"
-  wine_doctor
-  echo "✓ Wine-Selbsttest erfolgreich."
-  echo
-
-  if find_incomplete_prefix >/dev/null 2>&1; then
-    echo "Eine unvollständige frühere Installation wurde erkannt."
-    echo "Sie wird jetzt sicher über den vorhandenen Recovery-Pfad behandelt."
-    echo
+  local hw
+  hw="$(backend_game_status)"
+  if [[ "$(printf '%s\n' "$hw" | sed -n 's/^health=//p')" == "hardware-blocked" ]]; then
+    echo "Hardware-Prüfung nicht bestanden:"
+    printf '%s\n' "$hw" | grep -E '^(hardware_reason|gpu|vulkan)='
     trap - ERR
-    launch_terminal_action recover-prefix-terminal
-    return 0
+    return 2
   fi
 
-  echo "Starte LUG Preflight …"
-  run_helper_visible --preflight-check || true
-
-  if ! read_prefix >/dev/null 2>&1; then
-    echo
-    echo "Installiere den RSI Launcher mit dem aktuellen LUG Helper …"
-    run_helper_visible --install
-  fi
-
-  prefix="$(read_prefix 2>/dev/null || true)"
-  if [[ -n "$prefix" && ! -f "$prefix/sc-launch.sh" ]]; then
-    run_helper_visible --update-launch-script
-  fi
-
-  # Maintenance once more now that a prefix exists: switches sc-launch.sh to
-  # the tested managed runner and installs current DXVK.
+  echo "1/4 Autopilot aktivieren und Quellen synchronisieren …"
+  autopilot_enable
   echo
-  echo "Aktualisiere Wine/DXVK für den neu eingerichteten Prefix …"
-  autopilot_maintain
+  echo "2/4 Kompatiblen Wine-Runner prüfen …"
+  wine_doctor
+  echo
+  echo "3/4 Wine-Prefix, Komponenten und RSI Launcher installieren/reparieren …"
+  backend_game_install
+  echo
+  echo "4/4 Gaming-Stack abschließend synchronisieren …"
+  autopilot_maintain || true
 
   trap - ERR
-  notify "Omarchy Citizen" "Autopilot ist aktiv. Der Gaming-Stack wird künftig automatisch gepflegt."
-  log_line "autopilot setup complete"
   echo
   echo "=================================================="
-  echo " AUTOPILOT AKTIV"
+  echo " SOFTWARE-STACK BEREIT"
   echo "=================================================="
   echo
-  echo "Künftig reicht der große STAR-CITIZEN-Button."
+  echo "Der RSI Launcher kann jetzt gestartet werden."
+  echo "Anmeldung und der eigentliche Spieldownload erfolgen im offiziellen RSI Launcher."
+  notify "Omarchy Citizen" "Software-Stack ist bereit. RSI Launcher kann gestartet werden."
 }
 
 update_helper_terminal() {
@@ -814,147 +444,50 @@ system_update_terminal() {
 }
 
 launch_game() {
-  local prefix script
-  prefix="$(read_prefix 2>/dev/null)" || {
-    guided_setup
-    return
-  }
-
-  script="$prefix/sc-launch.sh"
-  if [[ ! -f "$script" ]]; then
-    log_line "launch script missing; opening repair"
-    run_helper_gui --update-launch-script
-    return
+  log_line "launch via owned backend"
+  if ! backend_game_launch >>"$LOG_FILE" 2>&1; then
+    notify_error "Star Citizen konnte nicht gestartet werden. Nutze „Problem beheben“ oder erstelle ein Support-Paket."
+    return 1
   fi
-
-  log_line "launch game via sc-launch.sh"
-  nohup bash "$script" >>"$LOG_FILE" 2>&1 &
 }
 
 primary_action() {
   local st health backend
-  # Keep normal launch instant. Autopilot maintenance is delegated to systemd
-  # and never blocks the player's click.
   backend="$(find_backend 2>/dev/null || true)"
-  if [[ -n "$backend" ]]; then
-    systemctl --user start omarchy-citizen-update.service >/dev/null 2>&1 || true
-  fi
-
-  st="$("$SELF" status)"
+  [[ -n "$backend" ]] && systemctl --user start omarchy-citizen-update.service >/dev/null 2>&1 || true
+  st="$(status)"
   health="$(printf '%s\n' "$st" | sed -n 's/^health=//p' | head -n1)"
-
   case "$health" in
-    ready)
+    ready|install-game)
       launch_game
       ;;
-    setup)
-      launch_terminal_action install-stack-terminal
-      ;;
-    recover-prefix)
-      recover_incomplete_prefix
-      ;;
-    install)
-      guided_setup
-      ;;
-    install-game)
-      launch_game
-      ;;
-    repair)
-      run_helper_gui --update-launch-script
+    hardware-blocked)
+      hardware_info
       ;;
     *)
-      guided_setup
+      launch_terminal_action install-stack-terminal
       ;;
   esac
+}
+
+repair_stack_terminal() {
+  set -Ee
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  echo "Omarchy Citizen prüft und repariert den gesamten Star-Citizen-Stack …"
+  autopilot_maintain || true
+  backend_game_repair
+  echo "Reparatur abgeschlossen."
 }
 
 repair_assistant_interactive() {
-  local st health choice prefix
-
-  st="$("$SELF" status)"
+  local st health
+  st="$(status)"
   health="$(printf '%s\n' "$st" | sed -n 's/^health=//p' | head -n1)"
-  log_line "repair health=$health"
-
-  case "$health" in
-    setup)
-      launch_terminal_action install-stack-terminal
-      return
-      ;;
-    recover-prefix)
-      launch_terminal_action recover-prefix-terminal
-      return
-      ;;
-    install)
-      guided_setup_interactive
-      return
-      ;;
-    repair)
-      run_helper_sync --update-launch-script || true
-      notify "Omarchy Citizen" "Start-Script wurde geprüft/repariert. Versuche den Start erneut."
-      return
-      ;;
-  esac
-
-  if ! command -v zenity >/dev/null 2>&1; then
-    run_helper_gui --preflight-check
-    return
-  fi
-
-  choice="$(zenity --list \
-    --width=610 --height=420 \
-    --title="Omarchy Citizen – Problem beheben" \
-    --text="Was funktioniert nicht? Du brauchst keine Linux-Diagnose zu kennen." \
-    --column="Problem" \
-    "Automatisch prüfen (empfohlen)" \
-    "RSI Launcher startet nicht / ist kaputt" \
-    "Star Citizen startet nicht" \
-    "Grafik / Performance / Abstürze" \
-    "NGL macht Probleme" \
-    "Problem ist unklar – Support-Paket erstellen" \
-    2>/dev/null)" || return 0
-
-  log_line "repair choice=$choice"
-
-  case "$choice" in
-    "Automatisch prüfen (empfohlen)")
-      run_helper_sync --preflight-check || true
-      run_helper_sync --update-launch-script || true
-      notify "Omarchy Citizen" "Automatische Basisreparatur abgeschlossen. Bitte erneut starten."
-      ;;
-    "RSI Launcher startet nicht / ist kaputt")
-      run_helper_sync --update-rsi-launcher || true
-      run_helper_sync --update-launch-script || true
-      notify "Omarchy Citizen" "RSI Launcher und Start-Script wurden repariert."
-      ;;
-    "Star Citizen startet nicht")
-      run_helper_sync --preflight-check || true
-      run_helper_sync --update-launch-script || true
-      notify "Omarchy Citizen" "Startumgebung wurde geprüft. Falls es weiter nicht startet, erstelle bitte das Support-Paket."
-      ;;
-    "Grafik / Performance / Abstürze")
-      run_helper_sync --preflight-check || true
-      run_helper_gui --manage-runners
-      ;;
-    "NGL macht Probleme")
-      if zenity --question --width=540 \
-        --title="NGL Problem" \
-        --ok-label="Vanilla RSI Launcher reparieren" \
-        --cancel-label="Abbrechen" \
-        --text="Omarchy Citizen kann den offiziellen RSI Launcher über den LUG Helper neu installieren. NGL kann danach optional erneut installiert werden." \
-        2>/dev/null; then
-        run_helper_sync --update-rsi-launcher || true
-        run_helper_sync --update-launch-script || true
-      fi
-      ;;
-    "Problem ist unklar – Support-Paket erstellen")
-      "$SELF" support-build
-      ;;
-  esac
+  if [[ "$health" == "hardware-blocked" ]]; then hardware_info; return; fi
+  launch_terminal_action repair-stack-terminal
 }
 
-repair_assistant() {
-  repair_assistant_interactive
-}
+repair_assistant() { repair_assistant_interactive; }
 
 sanitize_to() {
   local source="$1"
@@ -1040,6 +573,7 @@ EOF
 
   if backend="$(find_backend 2>/dev/null)"; then
     capture_sanitized "$work/autopilot-status.txt" "$backend" status
+    capture_sanitized "$work/game-status.txt" "$backend" game-status
     capture_sanitized "$work/wine-doctor.txt" "$backend" doctor
   fi
 
@@ -1327,6 +861,7 @@ ngl_install() {
 
 case "$ACTION" in
   status)                   status ;;
+  hardware-info)            hardware_info ;;
   autopilot-enable)         autopilot_enable ;;
   autopilot-maintain)       autopilot_maintain ;;
   wine-doctor)              wine_doctor ;;
@@ -1337,6 +872,7 @@ case "$ACTION" in
   guided-setup-interactive) guided_setup_interactive ;;
   repair)                   repair_assistant ;;
   repair-interactive)       repair_assistant_interactive ;;
+  repair-stack-terminal)     repair_stack_terminal ;;
   support)                  support_start ;;
   support-build)            support_build ;;
   debug-log)                open_debug_log ;;

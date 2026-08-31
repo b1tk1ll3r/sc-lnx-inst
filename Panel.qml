@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.7.1"
+  property string pluginVersion: "0.8.0"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -39,6 +39,10 @@ Panel {
   property string managedWineVersion: ""
   property string managedDXVKVersion: ""
   property string maintenanceResult: ""
+  property string hardwareState: "unknown"
+  property string hardwareReason: ""
+  property string hardwareGPU: ""
+  property string hardwareVulkan: "unknown"
   property string actionStatus: ""
   property string actionError: ""
   property string actionKind: ""
@@ -102,7 +106,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.7.1"
+    pluginVersion = values.plugin_version || "0.8.0"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -127,6 +131,10 @@ Panel {
     managedWineVersion = values.managed_wine_version || ""
     managedDXVKVersion = values.managed_dxvk_version || ""
     maintenanceResult = values.maintenance_result || ""
+    hardwareState = values.hardware || "unknown"
+    hardwareReason = values.hardware_reason || ""
+    hardwareGPU = values.hardware_gpu || ""
+    hardwareVulkan = values.hardware_vulkan || "unknown"
   }
 
   function stateIcon(state) {
@@ -163,6 +171,7 @@ Panel {
   }
 
   function healthColor() {
+    if (health === "hardware-blocked") return danger
     if (health === "ready") return success
     if (health === "recover-prefix" || health === "repair") return warning
     if (health === "checking") return accent
@@ -170,6 +179,7 @@ Panel {
   }
 
   function headline() {
+    if (health === "hardware-blocked") return "HARDWARE NICHT SPIELBEREIT"
     if (health === "ready" && root.autopilot === "true") return "FLIGHT READY · AUTOPILOT"
     if (health === "ready") return "FLIGHT READY"
     if (health === "recover-prefix") return "SETUP REPAIR"
@@ -179,23 +189,22 @@ Panel {
   }
 
   function subline() {
+    if (health === "hardware-blocked")
+      return root.hardwareReason !== "" ? root.hardwareReason : "Eine für Star Citizen geeignete Vulkan-GPU wurde nicht erkannt."
     if (health === "ready")
-      return "Alles Wesentliche wurde gefunden. Star Citizen ist einen Klick entfernt."
-    if (health === "recover-prefix")
-      return "Eine frühere Wine-Einrichtung ist nur teilweise vorhanden. Omarchy Citizen kann sie sichern und sauber neu aufsetzen."
-    if (health === "repair")
-      return "Omarchy Citizen hat eine reparierbare Lücke erkannt."
+      return "Wine, DXVK und RSI Launcher sind geprüft. Star Citizen ist einen Klick entfernt."
     if (health === "install-game")
-      return "Die Linux-Basis steht. Der RSI Launcher führt dich durch die Spielinstallation."
-    if (health === "install")
-      return "Die Linux-Basis steht. Der grafische Star-Citizen-Assistent übernimmt den Rest."
-    return "Omarchy Citizen richtet Abhängigkeiten, LUG Helper und Star-Citizen-Basis geführt ein."
+      return "Der Software-Stack ist bereit. Melde dich im offiziellen RSI Launcher an und starte dort den Spieldownload."
+    if (health === "repair" || health === "launcher-repair")
+      return "Omarchy Citizen kann den gesamten verwalteten Gaming-Stack automatisch reparieren."
+    return "Omarchy Citizen wählt selbst einen kompatiblen Wine-Runner, erstellt den Prefix, installiert DXVK/Komponenten und den offiziellen RSI Launcher."
   }
 
   function primaryText() {
+    if (health === "hardware-blocked") return "ⓘ  HARDWARE-DETAILS"
     if (health === "ready") return "▶  STAR CITIZEN STARTEN"
-    if (health === "recover-prefix") return "↻  SETUP SICHER REPARIEREN"
-    if (health === "repair") return "↻  ERKANNTES PROBLEM BEHEBEN"
+    if (health === "install-game") return "▶  RSI LAUNCHER ÖFFNEN"
+    if (health === "repair" || health === "launcher-repair") return "↻  AUTOMATISCH REPARIEREN"
     return "▶  EINRICHTEN & STARTKLAR MACHEN"
   }
 
@@ -259,10 +268,10 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode === 0) {
         root.actionError = ""
-        root.actionStatus = root.actionKind === "primary" && root.health === "recover-prefix"
-          ? "Reparatur-Fenster wurde geöffnet. Dort läuft die sichere Wiederherstellung."
+        root.actionStatus = root.actionKind === "primary" && root.health === "install-game"
+          ? "RSI Launcher wurde gestartet."
           : (root.actionKind === "primary" && root.health !== "ready"
-              ? "Setup-Fenster wurde geöffnet. Folge dort einfach den angezeigten Schritten."
+              ? "Setup-Fenster wurde geöffnet. Omarchy Citizen übernimmt die technischen Schritte."
               : "Aktion wurde gestartet.")
         root.refreshStatus()
 
@@ -391,7 +400,8 @@ Panel {
               bordered: true
               active: root.health === "ready" || actionProc.running
               onClicked: root.runAction(
-                root.health === "repair" ? "repair" : "primary",
+                root.health === "hardware-blocked" ? "hardware-info" :
+                  ((root.health === "repair" || root.health === "launcher-repair") ? "repair" : "primary"),
                 root.health === "ready"
               )
             }
@@ -581,17 +591,23 @@ Panel {
             }
 
             StatusLine {
+              label: "GPU / Vulkan"
+              state: root.hardwareState === "blocked" ? "warning" : (root.hardwareState === "ready" ? "ready" : "unknown")
+              value: root.hardwareState === "blocked" ? "nicht spielbereit" : (root.hardwareGPU !== "" ? root.hardwareGPU : root.hardwareVulkan)
+            }
+
+            StatusLine {
               label: "Abhängigkeiten"
               state: root.depsState
               value: root.depsState === "ready" ? "bereit" : root.depsMissing
             }
 
             StatusLine {
-              label: "LUG Helper"
+              label: "Support-Helper"
               state: root.helperState
               value: root.helperState === "ready"
                 ? ((root.helperVersion !== "" ? root.helperVersion : "gefunden") +
-                   (root.helperManaged === "aur" ? " · AUR" : " · extern"))
+                   " · optional")
                 : "nicht installiert"
             }
 
@@ -604,9 +620,9 @@ Panel {
             }
 
             StatusLine {
-              label: "Start-Script"
+              label: "RSI Launcher"
               state: root.launcherState
-              value: root.launcherState === "ready" ? "bereit" : "fehlt"
+              value: root.launcherState === "ready" ? "installiert" : "fehlt"
             }
 
             PanelSeparator { foreground: root.barForeground }
@@ -722,11 +738,11 @@ Panel {
 
               Button {
                 width: setupGrid.cellWidth
-                text: root.checkingUpdate ? "Update wird geprüft…" : "LUG Update prüfen"
+                text: "Autopilot synchronisieren"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.checkForUpdates()
+                onClicked: root.runAction("autopilot-maintain")
               }
 
               Button {
@@ -749,7 +765,7 @@ Panel {
 
               Button {
                 width: setupGrid.cellWidth
-                text: "LUG Helper öffnen"
+                text: "Support-Helper öffnen"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
@@ -767,29 +783,29 @@ Panel {
 
               Button {
                 width: setupGrid.cellWidth
-                text: "DXVK verwalten"
+                text: "DXVK automatisch prüfen"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.runAction("dxvk")
+                onClicked: root.runAction("autopilot-maintain")
               }
 
               Button {
                 width: setupGrid.cellWidth
-                text: "RSI reparieren"
+                text: "Gaming-Stack reparieren"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.runAction("repair-rsi")
+                onClicked: root.runAction("repair")
               }
 
               Button {
                 width: setupGrid.cellWidth
-                text: "Start-Script reparieren"
+                text: "Launcher-Dateien reparieren"
                 foreground: root.barForeground
                 fontFamily: root.uiFont
                 bordered: true
-                onClicked: root.runAction("repair-launch")
+                onClicked: root.runAction("repair")
               }
 
               Button {

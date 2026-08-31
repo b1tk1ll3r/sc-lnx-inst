@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "author": "Community prototype",
   "license": "MIT",
-  "description": "Omarchy Citizen Autopilot with compatibility fallback: automatically selects the newest LUG Wine runner that passes a real Wine prefix self-test on this PC.",
+  "description": "Omarchy Citizen self-managed Star Citizen stack: compatible Wine selection, owned prefix/launcher installation, automatic DXVK/RSI updates, hardware gate, rollback and support diagnostics.",
   "kinds": [
     "bar-widget"
   ],

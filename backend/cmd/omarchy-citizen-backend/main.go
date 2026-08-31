@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	appVersion = "0.7.1"
+	appVersion = "0.8.0"
 	pluginID   = "local.omarchy-citizen"
 )
 
@@ -119,6 +119,25 @@ func main() {
 		}
 	case "doctor":
 		if err := app.wineDoctor(); err != nil {
+			fatal(err)
+		}
+	case "game-status":
+		st := app.gameStatus()
+		if hasArg(args[1:], "--json") {
+			printJSON(st)
+		} else {
+			printGameStatusKV(st)
+		}
+	case "game-install":
+		if err := app.gameInstall(); err != nil {
+			fatal(err)
+		}
+	case "game-launch":
+		if err := app.gameLaunch(); err != nil {
+			fatal(err)
+		}
+	case "game-repair":
+		if err := app.gameRepair(); err != nil {
 			fatal(err)
 		}
 	case "autopilot":
@@ -739,3 +758,25 @@ func printStatusKV(s Status) {
 	fmt.Printf("last_result=%s\n", s.LastResult)
 }
 func fatal(err error) { fmt.Fprintln(os.Stderr, "omarchy-citizen-backend:", err); os.Exit(1) }
+
+func printGameStatusKV(s GameStatus) {
+	fmt.Printf("backend_version=%s\n", s.BackendVersion)
+	fmt.Printf("health=%s\n", s.Health)
+	fmt.Printf("hardware=%s\n", s.Hardware)
+	fmt.Printf("hardware_reason=%s\n", s.HardwareReason)
+	fmt.Printf("gpu=%s\n", s.GPU)
+	fmt.Printf("vulkan=%s\n", s.Vulkan)
+	fmt.Printf("cpu_avx=%t\n", s.CPUAVX)
+	fmt.Printf("ram_gib=%d\n", s.RAMGiB)
+	fmt.Printf("combined_gib=%d\n", s.CombinedGiB)
+	fmt.Printf("disk_free_gib=%d\n", s.DiskFreeGiB)
+	fmt.Printf("prefix=%s\n", s.Prefix)
+	fmt.Printf("prefix_state=%s\n", s.PrefixState)
+	fmt.Printf("launcher_state=%s\n", s.LauncherState)
+	fmt.Printf("game_state=%s\n", s.GameState)
+	fmt.Printf("wine_version=%s\n", s.WineVersion)
+	fmt.Printf("dxvk_version=%s\n", s.DXVKVersion)
+	fmt.Printf("lug_version=%s\n", s.LUGVersion)
+	fmt.Printf("rsi_installer=%s\n", s.RSIInstaller)
+	fmt.Printf("autopilot=%t\n", s.Autopilot)
+}
