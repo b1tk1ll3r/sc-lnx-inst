@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": "Community prototype",
   "license": "MIT",
-  "description": "Plug-and-play Star Citizen for Omarchy with Autopilot: automatic plugin, LUG Helper AppImage, LUG Wine runner and DXVK maintenance, health checks, self-healing setup and sanitized support bundles.",
+  "description": "Omarchy Citizen Autopilot with compatibility fallback: automatically selects the newest LUG Wine runner that passes a real Wine prefix self-test on this PC.",
   "kinds": [
     "bar-widget"
   ],

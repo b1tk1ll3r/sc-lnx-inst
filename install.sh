@@ -48,7 +48,7 @@ omarchy plugin enable "$PLUGIN_ID"
 omarchy restart shell >/dev/null 2>&1 || true
 
 echo
-echo "Omarchy Citizen 0.7.0 wurde installiert:"
+echo "Omarchy Citizen 0.7.1 wurde installiert:"
 echo "  $DEST"
 echo
 echo "Links-Klick auf 'SC' in der Omarchy-Leiste öffnet das Star-Citizen-Panel."

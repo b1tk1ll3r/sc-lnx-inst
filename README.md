@@ -1,8 +1,8 @@
-# Omarchy Citizen 0.7.0
+# Omarchy Citizen 0.7.1
 
 ## Rundum-Sorglos / Autopilot
 
-Omarchy Citizen 0.7.0 changes the architecture from "frontend for packages the
+Omarchy Citizen 0.7.1 changes the architecture from "frontend for packages the
 user maintains" to "self-maintaining Star Citizen appliance".
 
 Autopilot manages the complete user-space gaming stack:
@@ -68,3 +68,17 @@ Logs:
 ## License
 
 MIT.
+
+## 0.7.1 compatibility fallback
+
+Autopilot no longer assumes that the newest LUG Wine release is compatible with
+every PC. It evaluates recent stable releases newest-first and activates the
+first runner that passes the full local prefix test.
+
+A rejected immutable release is cached against the current CPU/glibc
+fingerprint, so it is not downloaded again every six hours. If the machine's
+runtime fingerprint changes, it is eligible for retesting.
+
+Wine diagnostics now include the actual process error (`signal: illegal
+instruction`, missing loader/library, exit status, etc.) even when Wine writes
+nothing to stdout.

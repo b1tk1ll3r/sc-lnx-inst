@@ -1,4 +1,4 @@
-# Omarchy Citizen 0.7.0 – Rundum-Sorglos
+# Omarchy Citizen 0.7.1 – Rundum-Sorglos
 
 ## Installation
 
@@ -84,3 +84,22 @@ Das Paket enthält zusätzlich:
 - Wine-Selbsttest
 - Maintenance-Ergebnis
 - Updater-Log
+
+## Wine-Kompatibilitätsfallback (0.7.1)
+
+Autopilot verwendet nicht blind die höchste Versionsnummer.
+
+Beispiel:
+
+```text
+11.16-1 testen → nicht kompatibel
+11.15-1 testen → nicht kompatibel
+11.14-1 testen → funktioniert
+→ 11.14-1 wird automatisch aktiviert
+```
+
+Der Nutzer muss keine Wine-Version auswählen.
+
+Die konkrete Ursache eines fehlgeschlagenen Tests wird jetzt vollständig ins
+Updater-/Support-Log geschrieben, auch wenn `wineboot` selbst keine Textausgabe
+liefert.
