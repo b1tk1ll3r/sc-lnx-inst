@@ -12,7 +12,7 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
 
-  property string pluginVersion: "0.6.2"
+  property string pluginVersion: "0.6.3"
   property string health: "checking"
   property string depsState: "checking"
   property string depsMissing: ""
@@ -22,6 +22,7 @@ Panel {
   property string updateState: "unknown"
   property string updateVersion: ""
   property string prefixState: "checking"
+  property string prefixDetail: ""
   property string launcherState: "checking"
   property string gameState: "checking"
   property bool checkingUpdate: false
@@ -96,7 +97,7 @@ Panel {
       values[lines[i].slice(0, p)] = lines[i].slice(p + 1)
     }
 
-    pluginVersion = values.plugin_version || "0.6.2"
+    pluginVersion = values.plugin_version || "0.6.3"
     health = values.health || "setup"
     depsState = values.deps || "missing"
     depsMissing = values.deps_missing || ""
@@ -106,6 +107,7 @@ Panel {
     updateState = values.update || "unknown"
     updateVersion = values.update_version || ""
     prefixState = values.prefix || "missing"
+    prefixDetail = values.prefix_detail || ""
     launcherState = values.launcher || "missing"
     gameState = values.game || "missing"
     backendState = values.backend || "missing"
@@ -134,13 +136,14 @@ Panel {
 
   function healthColor() {
     if (health === "ready") return success
-    if (health === "repair") return warning
+    if (health === "recover-prefix" || health === "repair") return warning
     if (health === "checking") return accent
     return accent
   }
 
   function headline() {
     if (health === "ready") return "FLIGHT READY"
+    if (health === "recover-prefix") return "SETUP REPAIR"
     if (health === "repair") return "REPAIR AVAILABLE"
     if (health === "checking") return "SYSTEM CHECK"
     return "READY FOR SETUP"
@@ -149,6 +152,8 @@ Panel {
   function subline() {
     if (health === "ready")
       return "Alles Wesentliche wurde gefunden. Star Citizen ist einen Klick entfernt."
+    if (health === "recover-prefix")
+      return "Eine frühere Wine-Einrichtung ist nur teilweise vorhanden. Omarchy Citizen kann sie sichern und sauber neu aufsetzen."
     if (health === "repair")
       return "Omarchy Citizen hat eine reparierbare Lücke erkannt."
     if (health === "install-game")
@@ -160,6 +165,7 @@ Panel {
 
   function primaryText() {
     if (health === "ready") return "▶  STAR CITIZEN STARTEN"
+    if (health === "recover-prefix") return "↻  SETUP SICHER REPARIEREN"
     if (health === "repair") return "↻  ERKANNTES PROBLEM BEHEBEN"
     return "▶  EINRICHTEN & STARTKLAR MACHEN"
   }
@@ -557,7 +563,9 @@ Panel {
             StatusLine {
               label: "Wine-Prefix"
               state: root.prefixState
-              value: root.prefixState === "ready" ? "gefunden" : "nicht eingerichtet"
+              value: root.prefixState === "ready"
+                ? "initialisiert"
+                : (root.prefixState === "partial" ? "unvollständig · Reparatur möglich" : "nicht eingerichtet")
             }
 
             StatusLine {

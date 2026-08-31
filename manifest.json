@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "local.omarchy-citizen",
   "name": "Omarchy Citizen",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "author": "Community prototype",
   "license": "MIT",
-  "description": "Plug-and-play Star Citizen controls for Omarchy. 0.6.2 fixes status rendering and makes first-time setup visibly reliable.",
+  "description": "Plug-and-play Star Citizen controls for Omarchy. 0.6.3 detects and safely recovers incomplete Wine prefixes and improves LUG install diagnostics.",
   "kinds": [
     "bar-widget"
   ],

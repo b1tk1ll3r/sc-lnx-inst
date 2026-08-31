@@ -2,7 +2,7 @@
 set -u
 
 PLUGIN_ID="local.omarchy-citizen"
-PLUGIN_VERSION="0.6.2"
+PLUGIN_VERSION="0.6.3"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starcitizen-lug"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -215,12 +215,49 @@ Wähle im SC-Panel „Einrichten“ – Omarchy Citizen installiert die benötig
   fi
 }
 
-read_prefix() {
+configured_prefix() {
   [[ -f "$WINE_CONF" ]] || return 1
   local prefix
   IFS= read -r prefix < "$WINE_CONF"
-  [[ -n "$prefix" && -d "$prefix" ]] || return 1
+  [[ -n "$prefix" ]] || return 1
   printf '%s\n' "$prefix"
+}
+
+prefix_is_initialized() {
+  local prefix="$1"
+  [[ -d "$prefix/drive_c" ]] &&
+  [[ -f "$prefix/system.reg" ]] &&
+  [[ -f "$prefix/user.reg" ]]
+}
+
+read_prefix() {
+  local prefix
+  prefix="$(configured_prefix 2>/dev/null)" || return 1
+  [[ -d "$prefix" ]] || return 1
+  prefix_is_initialized "$prefix" || return 1
+  printf '%s\n' "$prefix"
+}
+
+find_incomplete_prefix() {
+  local prefix=""
+
+  prefix="$(configured_prefix 2>/dev/null || true)"
+  if [[ -n "$prefix" && -d "$prefix" ]] && ! prefix_is_initialized "$prefix"; then
+    printf '%s\n' "$prefix"
+    return 0
+  fi
+
+  prefix="$HOME/Games/star-citizen"
+  if [[ -d "$prefix" ]] && ! prefix_is_initialized "$prefix"; then
+    # Only treat the default path as our incomplete prefix when it contains
+    # LUG/installation artifacts rather than an arbitrary empty user folder.
+    if [[ -d "$prefix/runners" || -f "$prefix/sc-launch.sh" || -f "$prefix/.lughelper" ]]; then
+      printf '%s\n' "$prefix"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 read_game_dir() {
@@ -298,7 +335,7 @@ check_update() {
 status() {
   local helper="" version="" prefix="" game_dir="" dep missing_deps=""
   local helper_state="missing" helper_managed="missing" deps_state="ready"
-  local prefix_state="missing" launcher_state="missing" game_state="missing"
+  local prefix_state="missing" prefix_detail="" launcher_state="missing" game_state="missing"
   local update_state="unknown" update_version="" health="setup"
 
   for dep in "${GUI_PACKAGES[@]}"; do
@@ -330,9 +367,13 @@ status() {
 
   if prefix="$(read_prefix 2>/dev/null)"; then
     prefix_state="ready"
+    prefix_detail="initialisiert"
     if [[ -f "$prefix/sc-launch.sh" ]]; then
       launcher_state="ready"
     fi
+  elif prefix="$(find_incomplete_prefix 2>/dev/null)"; then
+    prefix_state="partial"
+    prefix_detail="unvollständig"
   fi
 
   if game_dir="$(read_game_dir 2>/dev/null)"; then
@@ -345,6 +386,8 @@ status() {
 
   if [[ "$deps_state" != "ready" || "$helper_state" != "ready" ]]; then
     health="setup"
+  elif [[ "$prefix_state" == "partial" ]]; then
+    health="recover-prefix"
   elif [[ "$prefix_state" != "ready" ]]; then
     health="install"
   elif [[ "$launcher_state" != "ready" ]]; then
@@ -365,6 +408,7 @@ status() {
   printf 'update=%s\n' "$update_state"
   printf 'update_version=%s\n' "$update_version"
   printf 'prefix=%s\n' "$prefix_state"
+  printf 'prefix_detail=%s\n' "$prefix_detail"
   printf 'launcher=%s\n' "$launcher_state"
   printf 'game=%s\n' "$game_state"
 
@@ -448,12 +492,143 @@ Bitte klicke auf „Support-Paket erstellen“. Der fehlgeschlagene Startversuch
   return 1
 }
 
+
+backup_lug_target_configs() {
+  local stamp="$1"
+  local f
+  mkdir -p "$CONFIG_DIR"
+  for f in "$WINE_CONF" "$GAME_CONF"; do
+    if [[ -f "$f" ]]; then
+      mv -- "$f" "${f}.incomplete-${stamp}"
+      log_line "backed up LUG config $(basename "$f") -> $(basename "${f}.incomplete-${stamp}")"
+    fi
+  done
+}
+
+stop_prefix_wineserver() {
+  local prefix="$1"
+  local wineserver=""
+
+  # Kill only a wineserver associated with the runner inside this target prefix.
+  # Do not kill unrelated Wine applications globally.
+  wineserver="$(find "$prefix/runners" -type f -path '*/bin/wineserver' -perm -u+x -print -quit 2>/dev/null || true)"
+  if [[ -n "$wineserver" ]]; then
+    WINEPREFIX="$prefix" "$wineserver" -k >>"$LOG_FILE" 2>&1 || true
+    sleep 0.5
+  fi
+}
+
+recover_incomplete_prefix_interactive() {
+  local prefix stamp backup datap4k=""
+
+  prefix="$(find_incomplete_prefix 2>/dev/null)" || {
+    log_line "recover-prefix requested but no incomplete prefix found"
+    guided_setup_interactive
+    return
+  }
+
+  datap4k="$prefix/drive_c/Program Files/Roberts Space Industries/StarCitizen/LIVE/Data.p4k"
+
+  # If real game data is present, never move it ourselves. Let the LUG Helper's
+  # built-in reinstall/migration path handle it.
+  if [[ -f "$datap4k" ]]; then
+    log_line "incomplete prefix contains Data.p4k; delegating migration to LUG Helper"
+    run_helper_sync --install || true
+    return
+  fi
+
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  backup="${prefix}-incomplete-${stamp}"
+
+  if command -v zenity >/dev/null 2>&1; then
+    if ! zenity --question \
+      --width=600 \
+      --title="Omarchy Citizen – unvollständiges Setup reparieren" \
+      --ok-label="Automatisch reparieren" \
+      --cancel-label="Abbrechen" \
+      --text="Omarchy Citizen hat einen halbfertigen Star-Citizen-Wine-Prefix erkannt:
+
+$prefix
+
+Es fehlen drive_c und/oder die Wine-Registrydateien. Fertige Star-Citizen-Spieldaten (Data.p4k) wurden nicht gefunden.
+
+Der Ordner wird NICHT gelöscht, sondern sicher umbenannt nach:
+
+$backup
+
+Danach startet der offizielle LUG-Installer sauber neu." 2>/dev/null; then
+      return 0
+    fi
+  else
+    printf '\nUnvollständiges Star-Citizen-Setup gefunden:\n%s\n\n' "$prefix"
+    printf 'Es wird gesichert als:\n%s\n\n' "$backup"
+    read -r -p "Automatisch reparieren? [j/N]: " answer
+    case "${answer,,}" in
+      j|ja|y|yes) ;;
+      *) return 0 ;;
+    esac
+  fi
+
+  log_line "recovering incomplete prefix=$prefix backup=$backup"
+  stop_prefix_wineserver "$prefix"
+
+  if ! mv -- "$prefix" "$backup"; then
+    notify_error "Der unvollständige Star-Citizen-Ordner konnte nicht gesichert werden.
+
+Bitte erstelle ein Support-Paket."
+    return 1
+  fi
+
+  backup_lug_target_configs "$stamp"
+
+  notify "Omarchy Citizen" "Unvollständiges Setup wurde gesichert. Der LUG-Installer startet jetzt neu."
+  run_helper_sync --install || {
+    log_line "fresh LUG install after incomplete-prefix recovery failed"
+    if command -v zenity >/dev/null 2>&1; then
+      if zenity --question \
+        --width=560 \
+        --title="Star-Citizen-Setup fehlgeschlagen" \
+        --ok-label="Support-Paket erstellen" \
+        --cancel-label="Später" \
+        --text="Auch der saubere Neuversuch konnte den Wine-Prefix nicht vollständig erstellen.
+
+Deine vorherige Installation wurde nicht gelöscht; sie liegt als Backup vor.
+
+Soll Omarchy Citizen jetzt direkt ein Support-Paket erstellen?" 2>/dev/null; then
+        "$SELF" support-build
+      fi
+    fi
+    return 1
+  }
+
+  if read_prefix >/dev/null 2>&1; then
+    notify "Omarchy Citizen" "Wine-Prefix wurde erfolgreich erstellt."
+    log_line "incomplete-prefix recovery succeeded"
+  else
+    log_line "LUG install returned but prefix still incomplete"
+    notify_error "Der LUG-Installer wurde beendet, aber der Wine-Prefix ist weiterhin unvollständig.
+
+Bitte erstelle ein Support-Paket."
+    return 1
+  fi
+}
+
+recover_incomplete_prefix() {
+  nohup bash "$SELF" recover-prefix-interactive >>"$LOG_FILE" 2>&1 &
+}
+
 guided_setup_interactive() {
   log_line "guided-setup begin"
 
   if ! find_helper >/dev/null 2>&1; then
     launch_terminal_action install-stack-terminal
     return 0
+  fi
+
+  if find_incomplete_prefix >/dev/null 2>&1; then
+    log_line "guided setup found incomplete prefix; switching to recovery"
+    recover_incomplete_prefix_interactive
+    return $?
   fi
 
   run_helper_sync --preflight-check || true
@@ -544,7 +719,13 @@ install_stack_terminal() {
 
   run_helper_sync --preflight-check || true
 
-  if ! read_prefix >/dev/null 2>&1; then
+  if find_incomplete_prefix >/dev/null 2>&1; then
+    echo
+    echo "Eine frühere, unvollständige Wine-Prefix-Erstellung wurde erkannt."
+    echo "Die Reparatur wird jetzt grafisch fortgesetzt."
+    echo
+    recover_incomplete_prefix_interactive
+  elif ! read_prefix >/dev/null 2>&1; then
     run_helper_sync --install || true
   fi
 
@@ -612,6 +793,9 @@ primary_action() {
     setup)
       launch_terminal_action install-stack-terminal
       ;;
+    recover-prefix)
+      recover_incomplete_prefix
+      ;;
     install)
       guided_setup
       ;;
@@ -637,6 +821,10 @@ repair_assistant_interactive() {
   case "$health" in
     setup)
       launch_terminal_action install-stack-terminal
+      return
+      ;;
+    recover-prefix)
+      recover_incomplete_prefix_interactive
       return
       ;;
     install)
@@ -859,6 +1047,30 @@ EOF
     rm -f "$CACHE_DIR/update-log-$$.txt"
   fi
 
+  # LUG Helper writes the detailed Wine-prefix installation output here.
+  # This is the most useful file when winetricks/Wine prefix creation fails.
+  latest_lug_install_log="$(find /tmp -maxdepth 1 -type f -name 'lughelper-install-*.log' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+  if [[ -n "$latest_lug_install_log" && -f "$latest_lug_install_log" ]]; then
+    tail -n 1200 "$latest_lug_install_log" > "$CACHE_DIR/lug-install-$$.txt"
+    sanitize_to "$CACHE_DIR/lug-install-$$.txt" "$work/lug-helper-install-tail.log"
+    rm -f "$CACHE_DIR/lug-install-$$.txt"
+  fi
+
+  configured="$(configured_prefix 2>/dev/null || true)"
+  if [[ -n "$configured" ]]; then
+    {
+      printf 'configured_prefix=%s\n' "$configured"
+      printf 'directory_exists=%s\n' "$([[ -d "$configured" ]] && echo yes || echo no)"
+      printf 'drive_c=%s\n' "$([[ -d "$configured/drive_c" ]] && echo present || echo missing)"
+      printf 'system_reg=%s\n' "$([[ -f "$configured/system.reg" ]] && echo present || echo missing)"
+      printf 'user_reg=%s\n' "$([[ -f "$configured/user.reg" ]] && echo present || echo missing)"
+      printf 'runner_dirs=%s\n' "$(find "$configured/runners" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null || true)"
+    } > "$CACHE_DIR/prefix-health-$$.txt"
+    sanitize_to "$CACHE_DIR/prefix-health-$$.txt" "$work/wine-prefix-health.txt"
+    rm -f "$CACHE_DIR/prefix-health-$$.txt"
+  fi
+
   prefix="$(read_prefix 2>/dev/null || true)"
   game_dir="$(read_game_dir 2>/dev/null || true)"
 
@@ -1055,6 +1267,8 @@ case "$ACTION" in
   status)                   status ;;
   primary)                  primary_action ;;
   setup)                    guided_setup ;;
+  recover-prefix)           recover_incomplete_prefix ;;
+  recover-prefix-interactive) recover_incomplete_prefix_interactive ;;
   guided-setup-interactive) guided_setup_interactive ;;
   repair)                   repair_assistant ;;
   repair-interactive)       repair_assistant_interactive ;;
