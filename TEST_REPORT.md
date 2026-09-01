@@ -1,49 +1,70 @@
-# Citizen Launcher 1.0.1 – Verification Report
+# Citizen Launcher 1.1.1 – Verification Report
 
-Date: 2026-08-31
+Date: 2026-09-01
 
-## Release gate
+## Release scope
 
-The 1.0.1 source tree passed the complete automated release gate:
+Citizen Launcher 1.1.1 keeps the confirmed playable 1.1.x multi-distribution gaming core and migrates CI/CD and release publishing to Gitea Actions.
 
-- shell syntax checks for installer, uninstaller, packaging and integration scripts
+## Automated release gate
+
+The 1.1.1 tree passes the local release gate with:
+
+- shell syntax checks for installers, packaging, Gitea release helper and tests
 - `gofmt` cleanliness
 - `go test ./...`
 - `go vet ./...`
-- static Linux amd64 build
+- static Linux amd64 build and version check
 - `go test -race ./...`
 - Omarchy updater integration test against disposable local Git repositories
 - Debian package build and metadata/payload verification
 - generic Linux amd64 tarball build and execution check
-- systemd service/timer syntax verification
-- desktop entry regression checks
-- AppStream and workflow validation inherited from the 1.0 release gate
+- Gitea workflow YAML parsing
+- assertion that legacy `.github/workflows/` does not shadow `.gitea/workflows/`
+- assertion that the release workflow does not use `gh release` or cross-job artifact actions
+- mocked Gitea REST API test covering release creation, release update on rerun, asset upload, same-name asset replacement and asset download
+- Gitea release-source parsing and `SHA256SUMS.txt` parser regression tests
+- static validation of RPM spec and Arch PKGBUILD/package hooks
+- multi-distro platform-family and immutable-host regression tests
+- native package self-update parser/asset-selection tests for DEB, RPM and pacman formats
 
-## Real-machine regressions reproduced from the support bundle
+## Gitea CI/CD design verified
 
-The uploaded Debian 13 support bundle exposed two 1.0.0 false negatives:
+Workflows live in:
 
-1. `vulkaninfo` reported both `AMD Radeon Graphics (RADV PHOENIX2)` and Mesa `llvmpipe`. 1.0.0 rejected the whole system merely because the software ICD was present. 1.0.1 parses devices independently and selects the real AMD GPU.
-2. The RSI PowerShell wrapper returned a successful process exit but no captured stdout. 1.0.0 incorrectly required a marker string in stdout. 1.0.1 validates PowerShell Core and then treats the wrapper's propagated exit status as authoritative.
+- `.gitea/workflows/ci.yml`
+- `.gitea/workflows/release.yml`
 
-Automated regression tests cover both conditions.
+The release workflow uses Gitea-native contexts (`gitea.api_url`, `gitea.repository`, `gitea.ref_name`, `gitea.sha`, `gitea.token`) and the built-in job token with `code: read` / `releases: write` permissions.
 
-## Additional process-level verification
+Release packages are uploaded directly to the Gitea Release rather than moved between jobs with `actions/upload-artifact`. The final job downloads the native release packages and publishes one deterministic `SHA256SUMS.txt`.
 
-A real two-process GUI test was run against the built binary:
+The release helper is rerun-safe: an existing release is refreshed and same-named attachments are replaced instead of duplicated.
 
-- first `gui --no-open` created a localhost endpoint
-- second `gui --no-open` returned the exact same endpoint instead of creating another backend
-- `/api/ping` on that endpoint reported version `1.0.1`
+## Gitea-aware launcher self-update
 
-A synthetic `vulkaninfo` run matching the support bundle's AMD + llvmpipe layout selected `AMD Radeon Graphics (RADV PHOENIX2)` and reported Vulkan `ready`. The sandbox itself has insufficient RAM for Star Citizen, so its overall hardware state remained blocked for RAM as expected; the GPU path was no longer the blocker.
+A Gitea workflow build injects this form as the launcher's trusted update source:
 
-## Final binary / package hashes
+```text
+gitea:<gitea.api_url>/repos/<owner>/<repo>
+```
 
-- `backend/bin/citizen-launcher`: `7cd0d85046b2c9ac295c6ef5b86f93a3452bfb3cd94cff048e7511db581f3d07`
-- `dist/citizen-launcher_1.0.1_amd64.deb`: `aba0944a0d2334f14f425e12a55ddd28d011449387e5be1ef3e0731e9d9a5119`
-- `dist/citizen-launcher-1.0.1-linux-amd64.tar.gz`: `59edf81938c305b1d86d917d38222470b4f5e42c9c3dc350bf1ac430d8748bfc`
+The launcher resolves Gitea's latest release API and maps the release `SHA256SUMS.txt` back onto the package assets before a privileged update is allowed. Privileged Gitea sources require HTTPS. Existing GitHub release-source syntax remains supported for migration/backward compatibility.
 
-## Scope boundary
+A separate build check confirmed that a `gitea:https://.../api/v1/repos/owner/repo` source is successfully embedded into the static binary and reported by `self-update status`.
 
-The release gate validates the launcher, package, updater, GUI, locks, migration, install/repair logic and local safety properties. It cannot perform an RSI account login or a complete live Star Citizen game session from this sandbox. Those remain real-machine acceptance tests.
+## Native package build coverage
+
+The current local build environment contains Debian packaging tools, therefore these artifacts can be built and inspected locally:
+
+- `dist/citizen-launcher_1.1.1_amd64.deb`
+- `dist/citizen-launcher-1.1.1-linux-amd64.tar.gz`
+
+The local environment does not provide native `rpmbuild` / Arch `makepkg`; the Gitea workflows build those in Fedora and Arch job containers:
+
+- `citizen-launcher-1.1.1-1.linux.x86_64.rpm`
+- `citizen-launcher-1.1.1-1-x86_64.pkg.tar.zst`
+
+## Gaming-core acceptance
+
+The Star Citizen install/play path is unchanged from the already accepted 1.0.1/1.1.0 line. The CI migration changes release and update plumbing, not Wine/DXVK/RSI launch behavior.

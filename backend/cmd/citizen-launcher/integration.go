@@ -96,8 +96,8 @@ func (a *App) starDesktopPath() string {
 	return filepath.Join(a.userApplicationsDir(), "citizen-launcher-star-citizen.desktop")
 }
 
-// migrateUserInstall removes the old ~/.local shadow install when a Debian
-// package is now authoritative. It only removes files that identify themselves
+// migrateUserInstall removes an old ~/.local shadow install when a native
+// system package is now authoritative. It only removes files that identify themselves
 // as Citizen Launcher and are not newer than the installed package.
 func (a *App) migrateUserInstall() {
 	if os.Geteuid() == 0 {

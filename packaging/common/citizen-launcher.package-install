@@ -1,0 +1,27 @@
+_is_immutable_host() {
+  [ -e /run/ostree-booted ] && return 0
+  [ -e /run/transactional-update ] && return 0
+  [ -r /etc/os-release ] && grep -Eq '^ID="?(steamos|opensuse-microos|aeon|kalpa)"?$' /etc/os-release && return 0
+  return 1
+}
+
+post_install() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if ! _is_immutable_host; then
+    systemctl enable --now citizen-launcher-self-update.timer >/dev/null 2>&1 || true
+  fi
+  sysctl -q -w vm.max_map_count=16777216 >/dev/null 2>&1 || true
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  systemctl disable --now citizen-launcher-self-update.timer >/dev/null 2>&1 || true
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}

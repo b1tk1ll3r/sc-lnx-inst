@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Citizen Launcher
+Comment=Star Citizen for Linux
+Exec=/usr/bin/citizen-launcher gui
+TryExec=/usr/bin/citizen-launcher
+Icon=citizen-launcher
+Terminal=false
+Type=Application
+Categories=Game;
+StartupNotify=true
+StartupWMClass=CitizenLauncher
+Keywords=Star Citizen;RSI;Wine;Gaming;

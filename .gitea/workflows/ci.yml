@@ -1,0 +1,64 @@
+name: Citizen Launcher CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  code: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - name: Install verification dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUDO=""
+          command -v sudo >/dev/null 2>&1 && SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends python3 python3-yaml dpkg-dev zstd
+      - name: Full regression suite
+        run: ./tests/full-verify.sh
+
+  rpm-package:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Build dependencies
+        run: dnf -y install git golang rpm-build systemd-rpm-macros curl python3
+      - uses: actions/checkout@v4
+      - name: Build backend and RPM
+        run: |
+          set -euo pipefail
+          ./build.sh
+          ./packaging/build-rpm.sh
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          rpm -qpi "dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
+
+  arch-package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      WORKSPACE: ${{ gitea.workspace }}
+    steps:
+      - name: Build dependencies
+        run: pacman -Syu --noconfirm --needed git go zstd curl python
+      - uses: actions/checkout@v4
+      - name: Build backend
+        run: ./build.sh
+      - name: Build pacman package as unprivileged user
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          useradd -m builder
+          chown -R builder:builder "$WORKSPACE"
+          su builder -s /bin/bash -c "cd '$WORKSPACE' && ./packaging/build-arch.sh"
+          test -s "dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst"

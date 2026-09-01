@@ -1,35 +1,51 @@
 # Citizen Launcher architecture
 
-## One source of truth
+## One gaming core, multiple Linux integrations
 
-The Go core under `backend/cmd/citizen-launcher` owns detection, setup, repair, launch, maintenance, support and self-update. Shell/QML integrations are adapters only; they must not duplicate the gaming-stack implementation.
+The Go core under `backend/cmd/citizen-launcher` is the only implementation of detection, setup, repair, launch, maintenance, support and self-update. Debian/RPM/Arch packages and the optional Omarchy widget are adapters around that core.
 
 ```text
-Standalone GUI / Omarchy adapter
-              │
-              ▼
-       Citizen Launcher Go core
-              │
-   ┌──────────┼───────────┐
-   ▼          ▼           ▼
-Preflight   Wine       RSI metadata
-            selector       │
-            + test          ▼
-   │          │       verified installer
-   └────┬─────┘             │
-        ▼                   ▼
-        managed Wine prefix
-        │       │        │
-        ▼       ▼        ▼
-   Winetricks  DXVK  PowerShell wrapper
-        └───────┬────────┘
-                ▼
-          RSI Launcher / Game
+          Standalone GUI / Omarchy adapter
+                     │
+                     ▼
+             Citizen Launcher Go core
+                     │
+       ┌─────────────┼──────────────┐
+       ▼             ▼              ▼
+ Distro/preflight   Wine        RSI metadata
+ + package mode     selector      + verifier
+       │             + test          │
+       └──────────┬──┴───────┬───────┘
+                  ▼          ▼
+              managed Wine prefix
+             Winetricks / DXVK /
+             PowerShell wrapper
+                  │
+                  ▼
+           RSI Launcher / Game
 ```
 
-## Activation model
+## Distribution abstraction
 
-Mutable downloads are staged first. Executable GitHub release assets require a SHA-256 digest. A Wine candidate is extracted to a staging directory, tested against a throw-away prefix, and only then becomes `vendor/wine/current`. The previous validated runner is retained.
+`platform.go` normalizes `/etc/os-release` into Debian, Fedora/RHEL, Arch, SUSE or generic families. Package-manager discovery is family-aware so a foreign tool in `$PATH` cannot accidentally select the wrong update strategy.
+
+Native package formats share the same payload:
+
+- `/usr/bin/citizen-launcher`
+- freedesktop desktop entry, icon and AppStream metadata
+- `vm.max_map_count` and file-limit policy
+- systemd package self-update timer
+- release-repository trust configuration
+
+Only packaging metadata and the native package database differ.
+
+## Mutable vs immutable systems
+
+Mutable package installs may update Citizen Launcher through APT, RPM or pacman after release-digest and package-metadata verification. OSTree/transactional/SteamOS-style systems are detected and their base image is left untouched. A user-mode install uses the verified generic tarball instead.
+
+## Activation and rollback model
+
+Mutable gaming-stack downloads are staged first. Executable release assets require an expected digest. A Wine candidate is extracted to a staging directory, tested against a throw-away prefix, and only then becomes `vendor/wine/current`; the previous validated runner is retained.
 
 The real game prefix is never used as the Wine compatibility test target.
 
@@ -37,14 +53,10 @@ The real game prefix is never used as the Wine compatibility test target.
 
 - `gui.lock`: one GUI backend process per user.
 - in-memory GUI job gate: one long-running GUI action at a time.
-- `maintenance.lock`: cross-process serialization of setup/repair/maintenance/launch transition.
-- `/proc` exact `WINEPREFIX` inspection: maintenance is deferred while user-facing prefix processes are active.
-- launch path rechecks RSI/Star Citizen after acquiring the stack lock, closing the double-click race.
+- `maintenance.lock`: cross-process serialization of setup/repair/maintenance/launch transitions.
+- exact `/proc` `WINEPREFIX` inspection: maintenance is deferred while RSI/Star Citizen/Wine tools use the prefix.
+- launch path rechecks RSI/Star Citizen after taking the stack lock.
 
-## GUI
+## Security boundary
 
-The UI is embedded in the static binary. It binds an ephemeral port on `127.0.0.1` and uses a cryptographically random per-process route token. No remote web content is needed. A second `citizen-launcher gui` discovers the locked instance and reopens that URL instead of spawning another backend.
-
-## Distribution boundary
-
-Citizen Launcher manages Wine/DXVK/RSI in XDG user directories. It does not replace distribution GPU drivers, kernels or package update policy. Debian packaging supplies only the system limits and a narrowly scoped package self-update timer; interactive system preparation uses Polkit rather than passwordless sudo.
+Citizen Launcher never creates passwordless sudo rules. Interactive privileged preparation uses Polkit/pkexec. Base-system upgrades, GPU drivers, kernel and firmware remain under the distribution's own update mechanism.

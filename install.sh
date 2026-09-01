@@ -3,6 +3,29 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BIN_SRC="$ROOT/backend/bin/citizen-launcher"
 BIN_DIR="$HOME/.local/bin"
+
+system_package_installed=false
+if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' citizen-launcher 2>/dev/null | grep -q 'install ok installed'; then
+  system_package_installed=true
+elif command -v rpm >/dev/null 2>&1 && rpm -q citizen-launcher >/dev/null 2>&1; then
+  system_package_installed=true
+elif command -v pacman >/dev/null 2>&1 && pacman -Q citizen-launcher >/dev/null 2>&1; then
+  system_package_installed=true
+fi
+
+immutable=false
+[[ -e /run/ostree-booted || -e /run/transactional-update ]] && immutable=true
+if [[ -r /etc/os-release ]]; then
+  os_id="$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | head -n1)"
+  case "$os_id" in steamos|opensuse-microos|aeon|kalpa) immutable=true;; esac
+fi
+
+if $system_package_installed && ! $immutable && [[ "${CITIZEN_LAUNCHER_ALLOW_USER_SHADOW:-0}" != 1 ]]; then
+  echo "Eine native Citizen-Launcher-Paketinstallation ist bereits vorhanden." >&2
+  echo "Die ~/.local-Version wird nicht darübergelegt, damit keine alte Version /usr/bin überschattet." >&2
+  echo "Bitte ./INSTALLIEREN.sh oder das native .deb/.rpm/.pkg.tar.zst für Updates verwenden." >&2
+  exit 2
+fi
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 

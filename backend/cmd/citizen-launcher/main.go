@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	appVersion  = "1.0.1"
-	releaseRepo = "sendnwv/omarchy-sc"
+	appVersion  = "1.1.1"
+	releaseRepo = "github:sendnwv/omarchy-sc"
 )
 
 const (
@@ -423,7 +423,7 @@ func (a *App) tick() error {
 			problems = append(problems, "gaming stack: "+err.Error())
 		}
 		// Generic ~/.local installations can update atomically in the user account.
-		// Debian packages are updated by the root system timer installed by the .deb.
+		// Native system packages are updated by the root package timer; user installs update atomically in the user account.
 		if su, err := a.selfUpdateStatus(true); err != nil {
 			a.logf("launcher release check warning: %v", err)
 		} else if su.State == "available" && su.Mode == "user" {
@@ -881,11 +881,14 @@ func printPlatformKV(p PlatformStatus) {
 	fmt.Printf("id=%s\n", p.ID)
 	fmt.Printf("name=%s\n", p.Name)
 	fmt.Printf("version=%s\n", p.Version)
+	fmt.Printf("variant=%s\n", p.Variant)
 	fmt.Printf("id_like=%s\n", p.IDLike)
+	fmt.Printf("family=%s\n", p.Family)
 	fmt.Printf("package_manager=%s\n", p.PackageManager)
 	fmt.Printf("desktop=%s\n", p.Desktop)
 	fmt.Printf("session=%s\n", p.Session)
 	fmt.Printf("systemd_user=%t\n", p.SystemdUser)
+	fmt.Printf("immutable=%t\n", p.Immutable)
 	fmt.Printf("omarchy=%t\n", p.Omarchy)
 }
 

@@ -23,14 +23,16 @@ import (
 var guiFiles embed.FS
 
 type GUIStatus struct {
-	Version           string         `json:"version"`
-	InstalledVersion  string         `json:"installed_version,omitempty"`
-	RestartRequired   bool           `json:"restart_required"`
-	PackageAutoUpdate bool           `json:"package_auto_update"`
-	Platform          PlatformStatus `json:"platform"`
-	Game              GameStatus     `json:"game"`
-	Launcher          Status         `json:"launcher"`
-	ActiveJob         *GUIJob        `json:"active_job,omitempty"`
+	Version            string         `json:"version"`
+	InstalledVersion   string         `json:"installed_version,omitempty"`
+	RestartRequired    bool           `json:"restart_required"`
+	PackageAutoUpdate  bool           `json:"package_auto_update"`
+	LauncherAutoUpdate bool           `json:"launcher_auto_update"`
+	SelfUpdateMode     string         `json:"self_update_mode"`
+	Platform           PlatformStatus `json:"platform"`
+	Game               GameStatus     `json:"game"`
+	Launcher           Status         `json:"launcher"`
+	ActiveJob          *GUIJob        `json:"active_job,omitempty"`
 }
 
 type GUIJob struct {
@@ -250,8 +252,11 @@ func (a *App) runGUI(args []string) error {
 	mux.HandleFunc(base+"/api/status", func(w http.ResponseWriter, r *http.Request) {
 		st, _ := a.status(false)
 		su, _ := a.selfUpdateStatus(false)
+		packageAuto := packageAutoUpdateActive()
+		launcherAuto := packageAuto || (su.Mode == "user" && st.AutoMaintain)
 		jsonOut(w, GUIStatus{Version: appVersion, InstalledVersion: su.Installed, RestartRequired: su.RestartNeeded,
-			PackageAutoUpdate: packageAutoUpdateActive(), Platform: detectPlatform(), Game: a.gameStatus(), Launcher: st, ActiveJob: jobs.active()})
+			PackageAutoUpdate: packageAuto, LauncherAutoUpdate: launcherAuto, SelfUpdateMode: su.Mode,
+			Platform: detectPlatform(), Game: a.gameStatus(), Launcher: st, ActiveJob: jobs.active()})
 	})
 	mux.HandleFunc(base+"/api/job/", func(w http.ResponseWriter, r *http.Request) {
 		j := jobs.get(strings.TrimPrefix(r.URL.Path, base+"/api/job/"))

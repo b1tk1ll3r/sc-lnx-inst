@@ -560,8 +560,8 @@ func (a *App) ensureLUGRuntime() (string, error) {
 }
 
 func (a *App) toolsEnv(base []string) ([]string, error) {
-	// Prefer ordinary distro tools. Debian packages install these explicitly,
-	// while most desktop distributions already provide curl/unzip.
+	// Prefer ordinary distro tools. Native packages request these where practical,
+	// while the portable toolbox remains a cross-distro fallback.
 	required := []string{"cabextract", "curl", "unzip"}
 	allSystem := true
 	for _, tool := range required {

@@ -85,3 +85,108 @@ func TestVerifyDebPackageRejectsMismatchedNewerVersion(t *testing.T) {
 		t.Fatal("mismatched package version was accepted")
 	}
 }
+
+func TestReleaseAssetsForAllNativeModes(t *testing.T) {
+	a, _ := newApp()
+	r := githubRelease{TagName: "v1.1.1", Assets: []githubAsset{
+		{Name: "citizen-launcher_1.1.1_amd64.deb"},
+		{Name: "citizen-launcher-1.1.1-1.linux.x86_64.rpm"},
+		{Name: "citizen-launcher-1.1.1-1-x86_64.pkg.tar.zst"},
+		{Name: "citizen-launcher-1.1.1-linux-amd64.tar.gz"},
+	}}
+	want := map[string]string{
+		"deb":  "citizen-launcher_1.1.1_amd64.deb",
+		"rpm":  "citizen-launcher-1.1.1-1.linux.x86_64.rpm",
+		"arch": "citizen-launcher-1.1.1-1-x86_64.pkg.tar.zst",
+		"user": "citizen-launcher-1.1.1-linux-amd64.tar.gz",
+	}
+	for mode, name := range want {
+		asset, err := a.releaseAssetForMode(r, "1.1.1", mode)
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if asset.Name != name {
+			t.Fatalf("%s: got %q want %q", mode, asset.Name, name)
+		}
+	}
+}
+
+func TestVerifyPackageIdentityAcceptsNativeReleaseSuffixes(t *testing.T) {
+	cases := []struct{ version, arch, wantArch string }{
+		{"1.1.0", "amd64", "amd64"},
+		{"1.1.0-1", "x86_64", "x86_64"},
+		{"1.1.0", "x86_64", "x86_64"},
+	}
+	for _, tc := range cases {
+		if err := verifyPackageIdentity("citizen-launcher", tc.version, tc.arch, "1.1.0", tc.wantArch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyPackageIdentity("evil", "1.1.0", "x86_64", "1.1.0", "x86_64"); err == nil {
+		t.Fatal("wrong package name accepted")
+	}
+}
+
+func TestNativePackageDatabaseParsers(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, body string) {
+		p := filepath.Join(root, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("dpkg-query", "printf 'install ok installed\\n1.1.0\\n'")
+	write("rpm", "printf '1.1.0\\n'")
+	write("pacman", "printf 'citizen-launcher 1.1.0-1\\n'")
+	t.Setenv("PATH", root)
+
+	for mode, want := range map[string]string{"deb": "1.1.0", "rpm": "1.1.0", "arch": "1.1.0-1"} {
+		pkg := queryInstalledPackage(mode)
+		if pkg.Mode != mode || pkg.Version != want {
+			t.Fatalf("%s parser: %#v want version %s", mode, pkg, want)
+		}
+	}
+}
+
+func TestParseLauncherReleaseSource(t *testing.T) {
+	cases := []struct {
+		in, kind string
+		ok       bool
+	}{
+		{"owner/repo", "github", true},
+		{"github:owner/repo", "github", true},
+		{"gitea:https://git.example.test/api/v1/repos/owner/repo", "gitea", true},
+		{"gitea:https://git.example.test/sub/path/api/v1/repos/owner/repo", "gitea", true},
+		{"gitea:https://git.example.test/api/v1/repos/owner/repo/", "gitea", true},
+		{"gitea:http://git.example.test/api/v1/repos/owner/repo", "", false},
+		{"gitea:https://user:pass@git.example.test/api/v1/repos/owner/repo", "", false},
+		{"gitea:https://git.example.test/owner/repo", "", false},
+		{"../evil", "", false},
+	}
+	for _, tc := range cases {
+		src, ok := parseLauncherReleaseSource(tc.in)
+		if ok != tc.ok {
+			t.Fatalf("parseLauncherReleaseSource(%q) ok=%v want %v", tc.in, ok, tc.ok)
+		}
+		if ok && src.Kind != tc.kind {
+			t.Fatalf("parseLauncherReleaseSource(%q) kind=%q want %q", tc.in, src.Kind, tc.kind)
+		}
+	}
+}
+
+func TestParseSHA256SUMS(t *testing.T) {
+	body := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  citizen-launcher_1.1.1_amd64.deb\n" +
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *citizen-launcher-1.1.1-linux-amd64.tar.gz\n" +
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  ../escape.deb\n" +
+		"not-a-hash  ignored\n"
+	got := parseSHA256SUMS(body)
+	if got["citizen-launcher_1.1.1_amd64.deb"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatal("deb checksum missing")
+	}
+	if got["citizen-launcher-1.1.1-linux-amd64.tar.gz"] != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatal("tarball checksum missing")
+	}
+	if _, ok := got["escape.deb"]; ok {
+		t.Fatal("path-traversal checksum entry accepted")
+	}
+}

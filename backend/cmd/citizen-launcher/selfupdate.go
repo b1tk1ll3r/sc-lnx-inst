@@ -3,9 +3,12 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +33,11 @@ type SelfUpdateStatus struct {
 	Error         string `json:"error,omitempty"`
 }
 
+type installedPackage struct {
+	Mode    string
+	Version string
+}
+
 func packageAutoUpdateActive() bool {
 	if !commandExists("systemctl") {
 		return false
@@ -37,9 +45,52 @@ func packageAutoUpdateActive() bool {
 	return exec.Command("systemctl", "is-enabled", "citizen-launcher-self-update.timer").Run() == nil
 }
 
-var releaseRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var releaseRepoPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
-func validReleaseRepo(v string) bool { return releaseRepoPattern.MatchString(strings.TrimSpace(v)) }
+type launcherReleaseSource struct {
+	Kind       string
+	Display    string
+	GitHubRepo string
+	APIRepoURL string
+}
+
+func parseLauncherReleaseSource(v string) (launcherReleaseSource, bool) {
+	v = strings.TrimSpace(v)
+	if releaseRepoPattern.MatchString(v) {
+		return launcherReleaseSource{Kind: "github", Display: v, GitHubRepo: v}, true
+	}
+	if strings.HasPrefix(v, "github:") {
+		repo := strings.TrimSpace(strings.TrimPrefix(v, "github:"))
+		if releaseRepoPattern.MatchString(repo) {
+			return launcherReleaseSource{Kind: "github", Display: "github:" + repo, GitHubRepo: repo}, true
+		}
+		return launcherReleaseSource{}, false
+	}
+	if strings.HasPrefix(v, "gitea:") {
+		raw := strings.TrimSpace(strings.TrimPrefix(v, "gitea:"))
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return launcherReleaseSource{}, false
+		}
+		clean := strings.TrimRight(u.String(), "/")
+		// Store the exact Gitea API repository endpoint so installations also work
+		// when the Gitea instance itself is hosted below a URL sub-path.
+		if !strings.Contains(u.Path, "/api/v1/repos/") {
+			return launcherReleaseSource{}, false
+		}
+		tail := strings.Trim(strings.SplitN(u.Path, "/api/v1/repos/", 2)[1], "/")
+		if !releaseRepoPattern.MatchString(tail) {
+			return launcherReleaseSource{}, false
+		}
+		return launcherReleaseSource{Kind: "gitea", Display: "gitea:" + clean, APIRepoURL: clean}, true
+	}
+	return launcherReleaseSource{}, false
+}
+
+func validReleaseRepo(v string) bool {
+	_, ok := parseLauncherReleaseSource(v)
+	return ok
+}
 
 func effectiveReleaseRepo() string {
 	// Never let a user-controlled environment variable redirect the privileged
@@ -67,16 +118,128 @@ func effectiveReleaseRepo() string {
 	if validReleaseRepo(releaseRepo) {
 		return releaseRepo
 	}
-	return "sendnwv/omarchy-sc"
+	return "github:sendnwv/omarchy-sc"
+}
+
+func launcherLatestRelease(spec string) (githubRelease, error) {
+	source, ok := parseLauncherReleaseSource(spec)
+	if !ok {
+		return githubRelease{}, fmt.Errorf("invalid launcher release source %q", spec)
+	}
+	var rel githubRelease
+	var err error
+	switch source.Kind {
+	case "github":
+		rel, err = githubLatest(source.GitHubRepo)
+	case "gitea":
+		req, reqErr := http.NewRequest("GET", source.APIRepoURL+"/releases/latest", nil)
+		if reqErr != nil {
+			return githubRelease{}, reqErr
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			return githubRelease{}, doErr
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return githubRelease{}, fmt.Errorf("Gitea release API returned HTTP %d", resp.StatusCode)
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel)
+	default:
+		err = fmt.Errorf("unsupported release source %q", source.Kind)
+	}
+	if err != nil {
+		return githubRelease{}, err
+	}
+	// Gitea release attachments do not currently expose GitHub's per-asset
+	// digest field. Release workflows publish SHA256SUMS.txt, which is resolved
+	// here into the same digest field used by the fail-closed updater.
+	if err := hydrateReleaseChecksums(&rel); err != nil {
+		return githubRelease{}, err
+	}
+	return rel, nil
+}
+
+func hydrateReleaseChecksums(rel *githubRelease) error {
+	if rel == nil {
+		return errors.New("nil release")
+	}
+	checksumURL := ""
+	for _, asset := range rel.Assets {
+		if asset.Name == "SHA256SUMS.txt" {
+			checksumURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+	if checksumURL == "" {
+		return nil
+	}
+	req, err := http.NewRequest("GET", checksumURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("release checksum download returned HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return err
+	}
+	checksums := parseSHA256SUMS(string(data))
+	for i := range rel.Assets {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rel.Assets[i].Digest)), "sha256:") {
+			continue
+		}
+		if sum := checksums[rel.Assets[i].Name]; sum != "" {
+			rel.Assets[i].Digest = "sha256:" + sum
+		}
+	}
+	return nil
+}
+
+func parseSHA256SUMS(body string) map[string]string {
+	out := map[string]string{}
+	hex64 := regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !hex64.MatchString(fields[0]) {
+			continue
+		}
+		name := strings.TrimPrefix(fields[len(fields)-1], "*")
+		name = strings.TrimPrefix(name, "./")
+		if filepath.Base(name) != name || name == "" {
+			continue
+		}
+		out[name] = strings.ToLower(fields[0])
+	}
+	return out
 }
 
 func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
-	installed := installedPackageVersion()
+	pkg := installedPackageInfo()
+	mode := a.installMode()
+	installed := pkg.Version
+	if mode == "user" {
+		installed = executableVersion(a.selfPath)
+	}
 	st := SelfUpdateStatus{
 		Current:    appVersion,
 		Installed:  installed,
 		State:      "not-checked",
-		Mode:       a.installMode(),
+		Mode:       mode,
 		Repository: effectiveReleaseRepo(),
 	}
 	if installed != "" && compareVersions(installed, appVersion) > 0 {
@@ -89,7 +252,7 @@ func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
 		return st, nil
 	}
 
-	release, err := githubLatest(effectiveReleaseRepo())
+	release, err := launcherLatestRelease(effectiveReleaseRepo())
 	st.CheckedAt = time.Now().Format(time.RFC3339)
 	if err != nil {
 		st.State = "check-failed"
@@ -104,7 +267,27 @@ func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
 	}
 	st.Latest = latest
 
-	asset, err := a.releaseAssetForMode(release, latest, st.Mode)
+	current := appVersion
+	if installed != "" && compareVersions(installed, current) > 0 {
+		current = installed
+	}
+	cmp := compareVersions(latest, current)
+
+	// Immutable system images must be updated by their host image/package layer.
+	// A ~/.local installation on the same machine still uses mode=user and can
+	// update itself atomically without touching the immutable base system.
+	if mode == "system-managed" {
+		if cmp > 0 {
+			st.State = "external-update"
+		} else if st.RestartNeeded {
+			st.State = "restart-required"
+		} else {
+			st.State = "current"
+		}
+		return st, nil
+	}
+
+	asset, err := a.releaseAssetForMode(release, latest, mode)
 	if err != nil {
 		st.State = "asset-missing"
 		st.Error = err.Error()
@@ -113,11 +296,6 @@ func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
 	st.Asset = asset.Name
 	st.Digest = asset.Digest
 
-	current := appVersion
-	if installed != "" && compareVersions(installed, current) > 0 {
-		current = installed
-	}
-	cmp := compareVersions(latest, current)
 	switch {
 	case cmp > 0:
 		st.State = "available"
@@ -130,52 +308,129 @@ func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
 }
 
 func (a *App) installMode() string {
-	if installedPackageVersion() != "" && commandExists("dpkg-deb") {
-		return "deb"
+	pkg := installedPackageInfo()
+	if pkg.Version == "" || !isSystemExecutable(a.selfPath) {
+		return "user"
 	}
-	return "user"
+	p := detectPlatform()
+	if p.Immutable {
+		return "system-managed"
+	}
+	return pkg.Mode
 }
 
-func installedPackageVersion() string {
-	if !commandExists("dpkg-query") {
+func isSystemExecutable(path string) bool {
+	if path == "" {
+		return false
+	}
+	clean, _ := filepath.EvalSymlinks(path)
+	if clean == "" {
+		clean = filepath.Clean(path)
+	}
+	return clean == "/usr/bin/citizen-launcher" || clean == "/bin/citizen-launcher"
+}
+
+func executableVersion(path string) string {
+	if path == "" {
 		return ""
 	}
-	cmd := exec.Command("dpkg-query", "-W", "-f=${Status}\n${Version}", "citizen-launcher")
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command(path, "--version").CombinedOutput()
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) < 2 || !strings.Contains(lines[0], "install ok installed") {
-		return ""
+	return strings.TrimSpace(string(out))
+}
+
+func installedPackageVersion() string { return installedPackageInfo().Version }
+
+func installedPackageInfo() installedPackage {
+	// Prefer the package database native to /etc/os-release. This prevents a
+	// developer-installed foreign package tool from taking ownership of updates.
+	vals := readOSRelease("/etc/os-release")
+	family := distroFamily(strings.ToLower(vals["ID"]), strings.ToLower(vals["ID_LIKE"]))
+	order := []string{"deb", "rpm", "arch"}
+	switch family {
+	case "debian":
+		order = []string{"deb", "rpm", "arch"}
+	case "fedora", "suse":
+		order = []string{"rpm", "deb", "arch"}
+	case "arch":
+		order = []string{"arch", "rpm", "deb"}
 	}
-	return strings.TrimSpace(lines[len(lines)-1])
+	for _, mode := range order {
+		if pkg := queryInstalledPackage(mode); pkg.Version != "" {
+			return pkg
+		}
+	}
+	return installedPackage{}
+}
+
+func queryInstalledPackage(mode string) installedPackage {
+	switch mode {
+	case "deb":
+		if !commandExists("dpkg-query") {
+			return installedPackage{}
+		}
+		cmd := exec.Command("dpkg-query", "-W", "-f=${Status}\n${Version}", "citizen-launcher")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) >= 2 && strings.Contains(lines[0], "install ok installed") {
+				return installedPackage{Mode: "deb", Version: strings.TrimSpace(lines[len(lines)-1])}
+			}
+		}
+	case "rpm":
+		if !commandExists("rpm") {
+			return installedPackage{}
+		}
+		cmd := exec.Command("rpm", "-q", "--qf", "%{VERSION}\n", "citizen-launcher")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				return installedPackage{Mode: "rpm", Version: v}
+			}
+		}
+	case "arch":
+		if !commandExists("pacman") {
+			return installedPackage{}
+		}
+		cmd := exec.Command("pacman", "-Q", "citizen-launcher")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			fields := strings.Fields(strings.TrimSpace(string(out)))
+			if len(fields) >= 2 && fields[0] == "citizen-launcher" {
+				return installedPackage{Mode: "arch", Version: fields[1]}
+			}
+		}
+	}
+	return installedPackage{}
 }
 
 func (a *App) releaseAssetForMode(release githubRelease, version, mode string) (githubAsset, error) {
-	if mode == "deb" {
-		want := "citizen-launcher_" + version + "_amd64.deb"
-		for _, asset := range release.Assets {
-			if asset.Name == want {
-				return asset, nil
-			}
-		}
-		// Accept Debian revisions such as 0.9.2-1 while keeping the package name strict.
-		re := regexp.MustCompile(`^citizen-launcher_` + regexp.QuoteMeta(version) + `(?:-[0-9]+)?_amd64\.deb$`)
+	patterns := map[string][]*regexp.Regexp{
+		"deb": {
+			regexp.MustCompile(`^citizen-launcher_` + regexp.QuoteMeta(version) + `_amd64\.deb$`),
+			regexp.MustCompile(`^citizen-launcher_` + regexp.QuoteMeta(version) + `-[0-9]+_amd64\.deb$`),
+		},
+		"rpm": {
+			regexp.MustCompile(`^citizen-launcher-` + regexp.QuoteMeta(version) + `-[0-9]+(?:\.[A-Za-z0-9_.-]+)?\.x86_64\.rpm$`),
+		},
+		"arch": {
+			regexp.MustCompile(`^citizen-launcher-` + regexp.QuoteMeta(version) + `-[0-9]+-x86_64\.pkg\.tar\.(?:zst|xz|gz)$`),
+		},
+		"user": {
+			regexp.MustCompile(`^citizen-launcher-` + regexp.QuoteMeta(version) + `-linux-amd64\.tar\.gz$`),
+		},
+	}
+	res, ok := patterns[mode]
+	if !ok {
+		return githubAsset{}, fmt.Errorf("release updates are not supported for install mode %q", mode)
+	}
+	for _, re := range res {
 		for _, asset := range release.Assets {
 			if re.MatchString(asset.Name) {
 				return asset, nil
 			}
 		}
-		return githubAsset{}, fmt.Errorf("release %s has no amd64 Debian package", release.TagName)
 	}
-	want := "citizen-launcher-" + version + "-linux-amd64.tar.gz"
-	for _, asset := range release.Assets {
-		if asset.Name == want {
-			return asset, nil
-		}
-	}
-	return githubAsset{}, fmt.Errorf("release %s has no generic amd64 tarball", release.TagName)
+	return githubAsset{}, fmt.Errorf("release %s has no %s package for x86-64", release.TagName, mode)
 }
 
 func (a *App) applySelfUpdate(system, quiet bool) error {
@@ -185,15 +440,22 @@ func (a *App) applySelfUpdate(system, quiet bool) error {
 	}
 	if st.State == "current" || st.State == "restart-required" {
 		if !quiet {
-			fmt.Printf("Citizen Launcher %s ist bereits installiert.\n", st.Installed)
+			shown := st.Installed
+			if shown == "" {
+				shown = appVersion
+			}
+			fmt.Printf("Citizen Launcher %s ist bereits installiert.\n", shown)
 		}
 		return nil
+	}
+	if st.State == "external-update" || st.Mode == "system-managed" {
+		return errors.New("Dieses immutable Linux-System verwaltet /usr über sein System-Image. Bitte Citizen Launcher über rpm-ostree/transactional-update bzw. die Distribution aktualisieren; eine ~/.local-Installation kann sich weiterhin selbst aktualisieren")
 	}
 	if st.State != "available" {
 		return fmt.Errorf("self-update is not applicable in state %q", st.State)
 	}
 
-	release, err := githubLatest(effectiveReleaseRepo())
+	release, err := launcherLatestRelease(effectiveReleaseRepo())
 	if err != nil {
 		return err
 	}
@@ -205,13 +467,13 @@ func (a *App) applySelfUpdate(system, quiet bool) error {
 		return err
 	}
 	if !strings.HasPrefix(strings.ToLower(asset.Digest), "sha256:") {
-		return errors.New("release asset has no GitHub SHA-256 digest; refusing automatic update")
+		return errors.New("release asset has no SHA-256 digest/checksum; refusing automatic update")
 	}
 
-	if st.Mode == "deb" {
+	if st.Mode == "deb" || st.Mode == "rpm" || st.Mode == "arch" {
 		if !system || os.Geteuid() != 0 {
 			if commandExists("pkexec") {
-				self := a.selfPath
+				self := a.stableExecutable()
 				if self == "" {
 					self = "/usr/bin/citizen-launcher"
 				}
@@ -219,14 +481,14 @@ func (a *App) applySelfUpdate(system, quiet bool) error {
 				cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 				return cmd.Run()
 			}
-			return errors.New("Debian package update needs root privileges and pkexec is unavailable")
+			return fmt.Errorf("%s package update needs root privileges and pkexec is unavailable", st.Mode)
 		}
-		return a.applyDebUpdate(asset, st.Latest, quiet)
+		return a.applyNativePackageUpdate(st.Mode, asset, st.Latest, quiet)
 	}
 	return a.applyUserUpdate(asset, st.Latest, quiet)
 }
 
-func (a *App) applyDebUpdate(asset githubAsset, version string, quiet bool) error {
+func (a *App) applyNativePackageUpdate(mode string, asset githubAsset, version string, quiet bool) error {
 	cache := "/var/cache/citizen-launcher"
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return err
@@ -241,34 +503,53 @@ func (a *App) applyDebUpdate(asset githubAsset, version string, quiet bool) erro
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := verifyDebPackage(tmp, version); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	switch mode {
+	case "deb":
+		if err := verifyDebPackage(tmp, version); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	case "rpm":
+		if err := verifyRPMPackage(tmp, version); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	case "arch":
+		if err := verifyArchPackage(tmp, version); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported native package mode %q", mode)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("apt-get",
-		"-o", "DPkg::Lock::Timeout=120",
-		"-o", "Dpkg::Options::=--force-confold",
-		"install", "-y", "--no-install-recommends", path,
-	)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	var cmd *exec.Cmd
+	switch mode {
+	case "deb":
+		cmd = exec.Command("apt-get", "-o", "DPkg::Lock::Timeout=120", "-o", "Dpkg::Options::=--force-confold", "install", "-y", "--no-install-recommends", path)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	case "rpm":
+		// The RPM has already been authenticated through the configured release
+		// source's SHA-256 metadata and its package metadata is checked above. rpm still performs
+		// dependency and scriptlet validation locally.
+		cmd = exec.Command("rpm", "-Uvh", "--replacepkgs", path)
+	case "arch":
+		cmd = exec.Command("pacman", "-U", "--noconfirm", "--needed", path)
+	}
 	if quiet {
 		if os.Geteuid() == 0 {
-			// The package updater runs with ProtectHome=true. Log to the systemd
-			// journal instead of trying to write below /root.
 			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		} else {
-			cmd.Stdout = a.logWriter()
-			cmd.Stderr = a.logWriter()
+			cmd.Stdout, cmd.Stderr = a.logWriter(), a.logWriter()
 		}
 	} else {
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("APT package update failed: %w", err)
+		return fmt.Errorf("%s package update failed: %w", mode, err)
 	}
 	installed := installedPackageVersion()
 	if compareVersions(installed, version) < 0 {
@@ -296,22 +577,59 @@ func verifyDebPackage(path, version string) error {
 			values[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
 	}
-	pkg, pkgVersion, arch := values["Package"], values["Version"], values["Architecture"]
-	if pkg == "" || pkgVersion == "" || arch == "" {
-		return fmt.Errorf("unexpected Debian package metadata: %q", strings.TrimSpace(string(out)))
+	return verifyPackageIdentity(values["Package"], values["Version"], values["Architecture"], version, "amd64")
+}
+
+func verifyRPMPackage(path, version string) error {
+	if !commandExists("rpm") {
+		return errors.New("rpm is unavailable")
 	}
-	if pkg != "citizen-launcher" {
-		return fmt.Errorf("refusing package %q", pkg)
+	cmd := exec.Command("rpm", "-qp", "--qf", "%{NAME}\n%{VERSION}\n%{ARCH}\n", path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cannot inspect RPM package: %s", formatCommandFailure(err, out))
 	}
-	versionOK := pkgVersion == version
-	if !versionOK {
-		rev := regexp.MustCompile(`^` + regexp.QuoteMeta(version) + `-[0-9]+$`)
-		versionOK = rev.MatchString(pkgVersion)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 3 {
+		return fmt.Errorf("unexpected RPM package metadata: %q", strings.TrimSpace(string(out)))
 	}
-	if !versionOK {
-		return fmt.Errorf("package version %q does not match release %q", pkgVersion, version)
+	return verifyPackageIdentity(strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1]), strings.TrimSpace(lines[2]), version, "x86_64")
+}
+
+func verifyArchPackage(path, version string) error {
+	tool := ""
+	if commandExists("bsdtar") {
+		tool = "bsdtar"
+	} else if commandExists("tar") {
+		tool = "tar"
+	} else {
+		return errors.New("tar/bsdtar is unavailable")
 	}
-	if arch != "amd64" {
+	out, err := exec.Command(tool, "-xOf", path, ".PKGINFO").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cannot inspect Arch package: %s", formatCommandFailure(err, out))
+	}
+	vals := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			vals[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return verifyPackageIdentity(vals["pkgname"], vals["pkgver"], vals["arch"], version, "x86_64")
+}
+
+func verifyPackageIdentity(name, pkgVersion, arch, releaseVersion, wantArch string) error {
+	if name == "" || pkgVersion == "" || arch == "" {
+		return fmt.Errorf("package metadata is incomplete (name=%q version=%q arch=%q)", name, pkgVersion, arch)
+	}
+	if name != "citizen-launcher" {
+		return fmt.Errorf("refusing package %q", name)
+	}
+	if compareVersions(pkgVersion, releaseVersion) != 0 {
+		return fmt.Errorf("package version %q does not match release %q", pkgVersion, releaseVersion)
+	}
+	if arch != wantArch {
 		return fmt.Errorf("refusing architecture %q", arch)
 	}
 	return nil
@@ -322,7 +640,7 @@ func (a *App) applyUserUpdate(asset githubAsset, version string, quiet bool) err
 		return errors.New("cannot locate running Citizen Launcher executable")
 	}
 	if !strings.HasPrefix(strings.ToLower(asset.Digest), "sha256:") {
-		return errors.New("release asset has no GitHub SHA-256 digest; refusing automatic update")
+		return errors.New("release asset has no SHA-256 digest/checksum; refusing automatic update")
 	}
 	if err := os.MkdirAll(a.cacheDir, 0o755); err != nil {
 		return err

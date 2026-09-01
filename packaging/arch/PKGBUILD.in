@@ -1,0 +1,40 @@
+pkgname=citizen-launcher
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Star Citizen setup, launcher and self-maintaining gaming stack for Linux'
+arch=('x86_64')
+url='https://github.com/sendnwv/omarchy-sc'
+license=('MIT')
+depends=('ca-certificates' 'tar' 'curl' 'unzip' 'xz' 'zstd' 'polkit' 'util-linux')
+optdepends=('pciutils: detailed GPU diagnostics'
+            'vulkan-tools: detailed Vulkan diagnostics'
+            'cabextract: use the distro cabextract instead of the portable fallback'
+            'xdg-utils: additional desktop/browser integration')
+options=('!strip')
+install='citizen-launcher.install'
+source=('citizen-launcher'
+        'io.github.citizenlauncher.CitizenLauncher.desktop'
+        'citizen-launcher.svg'
+        'io.github.citizenlauncher.CitizenLauncher.metainfo.xml'
+        'citizen-launcher-self-update.service'
+        'citizen-launcher-self-update.timer'
+        'citizen-launcher-migrate.desktop'
+        '90-citizen-launcher.conf'
+        '90-citizen-launcher-limits.conf'
+        'release-repo'
+        'LICENSE')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/citizen-launcher" "$pkgdir/usr/bin/citizen-launcher"
+  install -Dm644 "$srcdir/io.github.citizenlauncher.CitizenLauncher.desktop" "$pkgdir/usr/share/applications/io.github.citizenlauncher.CitizenLauncher.desktop"
+  install -Dm644 "$srcdir/citizen-launcher.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/citizen-launcher.svg"
+  install -Dm644 "$srcdir/io.github.citizenlauncher.CitizenLauncher.metainfo.xml" "$pkgdir/usr/share/metainfo/io.github.citizenlauncher.CitizenLauncher.metainfo.xml"
+  install -Dm644 "$srcdir/citizen-launcher-self-update.service" "$pkgdir/usr/lib/systemd/system/citizen-launcher-self-update.service"
+  install -Dm644 "$srcdir/citizen-launcher-self-update.timer" "$pkgdir/usr/lib/systemd/system/citizen-launcher-self-update.timer"
+  install -Dm644 "$srcdir/citizen-launcher-migrate.desktop" "$pkgdir/etc/xdg/autostart/citizen-launcher-migrate.desktop"
+  install -Dm644 "$srcdir/90-citizen-launcher.conf" "$pkgdir/usr/lib/sysctl.d/90-citizen-launcher.conf"
+  install -Dm644 "$srcdir/90-citizen-launcher-limits.conf" "$pkgdir/etc/security/limits.d/90-citizen-launcher.conf"
+  install -Dm644 "$srcdir/release-repo" "$pkgdir/etc/citizen-launcher/release-repo"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/citizen-launcher/LICENSE"
+}

@@ -1,47 +1,63 @@
-# Citizen Launcher 1.0.1
+# Citizen Launcher 1.1.1
 
-Citizen Launcher is a distro-neutral Star Citizen setup, launch, repair and maintenance application for Linux. Omarchy support is optional; the core is one static Go binary shared by Debian/Ubuntu, Fedora, Arch/Omarchy and other desktop distributions.
+Citizen Launcher is a cross-distribution Star Citizen setup, launch, repair and maintenance application for Linux. The same static Go core runs on Debian/Ubuntu, Fedora/RHEL derivatives, Arch derivatives, openSUSE and generic glibc-based desktop Linux. Omarchy support is an optional integration, not a runtime requirement.
 
 ## Product goal
 
 **Install Citizen Launcher → click setup → log into RSI → install/play Star Citizen.**
 
-The launcher owns the fragile user-space gaming stack so users do not have to pick Wine builds, copy DXVK DLLs or rebuild prefixes by hand. Kernel, GPU driver and base-distribution updates remain owned by the Linux distribution.
+The launcher owns the fragile user-space gaming stack so users do not have to pick Wine builds, copy DXVK DLLs or rebuild prefixes by hand. Kernel, GPU driver, firmware and base-distribution upgrades remain owned by the Linux distribution.
 
-## What 1.0 manages
+The 1.0.1 gaming path was confirmed end-to-end on real hardware: launcher, RSI installation and Star Citizen playability. 1.1.1 keeps that gaming core and adds native multi-distribution packaging/update integration.
 
-- hardware/Vulkan/AVX/RAM/storage/filesystem preflight
-- Linux `vm.max_map_count` and file-limit preparation
-- newest **locally compatible** stable LUG Wine runner with rollback retention
-- isolated Wine self-tests before runner activation
-- deterministic, SHA-256-pinned Winetricks base setup
-- verified portable PowerShell Core + RSI-compatible Wine wrapper (no fragile PowerShell MSI install)
-- DXVK download, digest verification, installation and native DLL overrides
-- RSI `latest.yml`, SHA-512 verified installer download and launcher repair
-- Star Citizen desktop entry and stable launch path
-- single-instance GUI, stack-operation locking and duplicate RSI/Star Citizen launch prevention
-- automatic gaming-stack maintenance
-- automatic verified Debian package self-updates
-- privacy-conscious support bundle and rotating logs
-- migration from older Omarchy Citizen / user-local installations
+## Supported Linux families
 
-## Install on Debian / Ubuntu / Mint
+- Debian / Ubuntu / Mint / Pop!_OS / Zorin / TUXEDO OS → `.deb`
+- Fedora / Nobara / RHEL-family → `.rpm`
+- Arch / Manjaro / EndeavourOS / CachyOS / Garuda / Omarchy → `.pkg.tar.zst`
+- openSUSE Tumbleweed / Slowroll → `.rpm`
+- immutable Fedora/SteamOS/openSUSE variants → safe `~/.local` user install
+- other glibc x86-64 desktops → generic tarball / user installer
 
-Install the release `.deb`:
+See `DISTRO_SUPPORT.md` for the detailed matrix and immutable-system behavior.
+
+## Easiest install from the project bundle
 
 ```bash
-sudo apt install ./citizen-launcher_1.0.1_amd64.deb
+./INSTALLIEREN.sh
 ```
 
-The package adds the desktop application and enables the system package-update timer. Future Citizen Launcher `.deb` releases can be installed automatically after release-asset digest and package metadata verification.
+The installer detects the distro family, prefers a native package found in `dist/`, and falls back to the portable user installation when that is safer or no native package is present.
 
-## Generic desktop Linux install
+### Debian / Ubuntu / Mint
+
+```bash
+sudo apt install ./dist/citizen-launcher_1.1.1_amd64.deb
+```
+
+### Fedora / Nobara / RHEL family
+
+```bash
+sudo dnf install ./dist/citizen-launcher-1.1.1-1.linux.x86_64.rpm
+```
+
+### openSUSE Tumbleweed / Slowroll
+
+```bash
+sudo zypper install ./dist/citizen-launcher-1.1.1-1.linux.x86_64.rpm
+```
+
+### Arch / Manjaro / EndeavourOS / CachyOS / Omarchy
+
+```bash
+sudo pacman -U ./dist/citizen-launcher-1.1.1-1-x86_64.pkg.tar.zst
+```
+
+### Generic / immutable desktop Linux
 
 ```bash
 ./install.sh
 ```
-
-or use the release tarball. Fedora/Arch/openSUSE users can use the generic build; an RPM spec is included for packaging work.
 
 For Omarchy plus the optional bar widget:
 
@@ -49,13 +65,43 @@ For Omarchy plus the optional bar widget:
 ./install-omarchy.sh
 ```
 
+## What Citizen Launcher manages
+
+- hardware/Vulkan/AVX/RAM/storage/filesystem preflight
+- `vm.max_map_count` and file-limit preparation
+- newest **locally compatible** stable LUG Wine runner with rollback retention
+- isolated Wine self-tests before activation
+- deterministic checksum-pinned Winetricks base setup
+- verified portable PowerShell Core + RSI-compatible Wine wrapper
+- DXVK download, verification, installation and native DLL overrides
+- RSI `latest.yml`, SHA-512 verified installer download and repair
+- Star Citizen desktop integration and stable launch path
+- single-instance GUI, operation locking and duplicate game/launcher prevention
+- automatic gaming-stack maintenance
+- verified native package self-updates on mutable Debian/RPM/Arch systems
+- safe user-binary updates on immutable/generic systems
+- privacy-conscious support bundle and rotating logs
+
+## Native package updates
+
+The system package timer only updates **Citizen Launcher itself**. It never performs a full distro upgrade.
+
+Package selection is tied to the installed package database:
+
+- DPKG package → `.deb` → APT
+- RPM package → `.rpm` → RPM database
+- pacman package → `.pkg.tar.zst` → pacman
+- user installation → generic tarball → atomic user update
+
+Before privileged installation, the release asset SHA-256 and package name/version/architecture are verified. GitHub sources can use the API digest; Gitea sources use the release `SHA256SUMS.txt` generated by the release workflow. Immutable base systems are excluded from direct system-package self-updates.
+
 ## GUI
 
 ```bash
 citizen-launcher gui
 ```
 
-The GUI is embedded in the binary and served only on `127.0.0.1` behind a random per-process route. Chromium-family browsers open it as an app window; otherwise the default browser is used. A file lock guarantees a single GUI backend. Opening Citizen Launcher again reuses the existing instance.
+The GUI is embedded in the binary and served only on `127.0.0.1` behind a random per-process route. A file lock guarantees one GUI backend per user; opening Citizen Launcher again reuses the existing instance.
 
 ## Data locations
 
@@ -65,25 +111,39 @@ The GUI is embedded in the binary and served only on `127.0.0.1` behind a random
 - `~/.cache/citizen-launcher`
 - default Wine prefix: `~/Games/star-citizen`
 
-The uninstaller intentionally preserves the game prefix, game files, configuration and support logs unless the user removes them separately.
+Game data is deliberately preserved during launcher uninstall/reinstall.
 
-## Build and verification
+## Build
+
+```bash
+./build.sh
+./packaging/build-all.sh
+```
+
+Individual native builders:
+
+```bash
+./packaging/build-deb.sh
+./packaging/build-rpm.sh
+./packaging/build-arch.sh
+./packaging/build-tarball.sh
+```
+
+RPM and Arch packages are built in native Fedora and Arch containers by Gitea Actions. Tag releases are published directly through the Gitea REST API; no `gh` CLI or GitHub release token is required.
+
+
+## Gitea Actions
+
+CI/CD lives in `.gitea/workflows/`. `ci.yml` runs the regression suite plus native Fedora/Arch package builds. `release.yml` reacts to `v*` tags, creates the Gitea Release through the built-in job token, uploads `.deb`, `.rpm`, `.pkg.tar.zst` and the generic tarball, then publishes `SHA256SUMS.txt`.
+
+Packages produced by the Gitea release workflow embed that Gitea instance/repository as their self-update source, so moving CI to Gitea does not leave runtime updates pointing back to GitHub. See `GITEA.md`.
+
+## Verification
 
 ```bash
 ./tests/full-verify.sh
 ```
 
-The full gate includes shell syntax, gofmt cleanliness, unit/regression tests, `go vet`, static amd64 build, Go race detector, Omarchy update integration test, Debian package build/metadata/payload verification and generic tarball verification.
+The release gate covers shell syntax, gofmt, Go unit/regression tests, `go vet`, static amd64 build, race detector, Omarchy integration, Debian payload verification and static validation of all native packaging definitions. Release CI additionally builds and inspects RPM and pacman packages inside their native distro environments.
 
-## Security / reliability boundaries
-
-- no passwordless sudo rules are created
-- executable release assets fail closed when their expected digest is unavailable
-- RSI installer is checked against its published SHA-512 metadata
-- Winetricks and the portable RSI PowerShell compatibility assets are version-pinned and checksum-verified
-- Wine/DXVK archives are extracted with path/symlink traversal checks
-- privileged Debian self-update accepts only the configured release repository, expected package name/version/architecture and verified SHA-256 asset digest
-- maintenance never rewrites the active Wine prefix while RSI Launcher/Star Citizen is using it
-- incomplete prefixes are preserved instead of blindly deleted
-
-See `ARCHITECTURE.md`, `DISTRO_SUPPORT.md` and `RELEASE_NOTES.md` for details.
+See `ARCHITECTURE.md`, `DISTRO_SUPPORT.md`, `packaging/SELF_UPDATE.md` and `RELEASE_NOTES.md` for details.
