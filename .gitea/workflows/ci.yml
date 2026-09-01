@@ -30,17 +30,51 @@ jobs:
   rpm-package:
     runs-on: ubuntu-latest
     container: fedora:44
+    env:
+      WORKSPACE: ${{ gitea.workspace }}
     steps:
-      - name: Build dependencies
-        run: dnf -y install git golang rpm-build systemd-rpm-macros curl python3
-      - uses: actions/checkout@v4
-      - name: Build backend and RPM
+      - name: Bootstrap minimal checkout dependency
+        shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$WORKSPACE/.dnf-cache"
+          dnf -y \
+            --setopt=system_cachedir="$WORKSPACE/.dnf-cache" \
+            --setopt=install_weak_deps=False \
+            --setopt=tsflags=nodocs \
+            install git-core
+          find "$WORKSPACE/.dnf-cache" -type f -name '*.rpm' -delete 2>/dev/null || true
+          df -h /
+      - uses: actions/checkout@v4
+      - name: Build backend with minimal Go toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf -y \
+            --setopt=system_cachedir="$WORKSPACE/.dnf-cache" \
+            --setopt=install_weak_deps=False \
+            --setopt=tsflags=nodocs \
+            install golang-bin
+          find "$WORKSPACE/.dnf-cache" -type f -name '*.rpm' -delete 2>/dev/null || true
           bash ./build.sh
+          # The backend is fully static; release the compiler before bringing in rpmbuild.
+          dnf -y --setopt=system_cachedir="$WORKSPACE/.dnf-cache" remove golang-bin || true
+          find "$WORKSPACE/.dnf-cache" -type f -name '*.rpm' -delete 2>/dev/null || true
+          df -h /
+      - name: Build RPM in low-disk mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf -y \
+            --setopt=system_cachedir="$WORKSPACE/.dnf-cache" \
+            --setopt=install_weak_deps=False \
+            --setopt=tsflags=nodocs \
+            install rpm-build
+          find "$WORKSPACE/.dnf-cache" -type f -name '*.rpm' -delete 2>/dev/null || true
           bash ./packaging/build-rpm.sh
           VERSION="$(tr -d '[:space:]' < VERSION)"
           rpm -qpi "dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
+          df -h /
 
   arch-package:
     runs-on: ubuntu-latest

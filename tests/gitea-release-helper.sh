@@ -25,7 +25,7 @@ class H(http.server.BaseHTTPRequestHandler):
         return r
     def do_GET(self):
         path=urllib.parse.urlparse(self.path).path
-        if path.endswith('/releases/tags/v1.1.2'):
+        if path.endswith('/releases/tags/v1.1.3'):
             if release is None: self.send_error(404); return
             self.sendj(200,self.rel()); return
         if path.startswith('/download/'):
@@ -78,12 +78,23 @@ export GITEA_API_URL="http://127.0.0.1:${PORT}/api/v1"
 export GITEA_REPOSITORY="owner/repo"
 export GITEA_TOKEN="test-token"
 
-echo first > "$TMP/citizen-launcher_1.1.2_amd64.deb"
-bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.2 'Citizen Launcher 1.1.2' "$ROOT/RELEASE_NOTES.md" deadbeef
-bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.2 'Citizen Launcher 1.1.2' "$ROOT/RELEASE_NOTES.md" deadbeef
-bash "$ROOT/scripts/gitea-release.sh" upload v1.1.2 "$TMP/citizen-launcher_1.1.2_amd64.deb"
-echo replacement > "$TMP/citizen-launcher_1.1.2_amd64.deb"
-bash "$ROOT/scripts/gitea-release.sh" upload v1.1.2 "$TMP/citizen-launcher_1.1.2_amd64.deb"
-bash "$ROOT/scripts/gitea-release.sh" download-assets v1.1.2 "$TMP/download"
-cmp "$TMP/citizen-launcher_1.1.2_amd64.deb" "$TMP/download/citizen-launcher_1.1.2_amd64.deb"
-echo 'Gitea release helper verification: OK'
+echo first > "$TMP/citizen-launcher_1.1.3_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.3 'Citizen Launcher 1.1.3' "$ROOT/RELEASE_NOTES.md" deadbeef
+bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.3 'Citizen Launcher 1.1.3' "$ROOT/RELEASE_NOTES.md" deadbeef
+bash "$ROOT/scripts/gitea-release.sh" upload v1.1.3 "$TMP/citizen-launcher_1.1.3_amd64.deb"
+echo replacement > "$TMP/citizen-launcher_1.1.3_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" upload v1.1.3 "$TMP/citizen-launcher_1.1.3_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" download-assets v1.1.3 "$TMP/download"
+cmp "$TMP/citizen-launcher_1.1.3_amd64.deb" "$TMP/download/citizen-launcher_1.1.3_amd64.deb"
+
+# Fedora RPM jobs intentionally avoid Python to keep the container footprint low.
+# Exercise the jq backend against the same mock Gitea API.
+command -v jq >/dev/null 2>&1 || { echo 'jq required for Gitea helper jq test' >&2; exit 1; }
+export CITIZEN_JSON_BACKEND=jq
+echo jq-backend > "$TMP/citizen-launcher-1.1.3-1.linux.x86_64.rpm"
+bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.3 'Citizen Launcher 1.1.3' "$ROOT/RELEASE_NOTES.md" deadbeef
+bash "$ROOT/scripts/gitea-release.sh" upload v1.1.3 "$TMP/citizen-launcher-1.1.3-1.linux.x86_64.rpm"
+bash "$ROOT/scripts/gitea-release.sh" download-assets v1.1.3 "$TMP/download-jq"
+cmp "$TMP/citizen-launcher-1.1.3-1.linux.x86_64.rpm" "$TMP/download-jq/citizen-launcher-1.1.3-1.linux.x86_64.rpm"
+
+echo 'Gitea release helper verification: OK (python + jq)'

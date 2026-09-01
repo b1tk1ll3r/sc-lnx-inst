@@ -5,7 +5,7 @@ for f in \
   "$ROOT/install.sh" "$ROOT/uninstall.sh" "$ROOT/install-omarchy.sh" "$ROOT/INSTALLIEREN.sh" \
   "$ROOT/build.sh" "$ROOT/packaging/build-deb.sh" "$ROOT/packaging/build-rpm.sh" \
   "$ROOT/packaging/build-arch.sh" "$ROOT/packaging/build-tarball.sh" "$ROOT/packaging/build-all.sh" \
-  "$ROOT/scripts/gitea-release.sh" "$ROOT/tests/gitea-release-helper.sh" "$ROOT/tests/mode-independence.sh"; do
+  "$ROOT/scripts/gitea-release.sh" "$ROOT/tests/gitea-release-helper.sh" "$ROOT/tests/mode-independence.sh" "$ROOT/tests/rpm-ci-footprint.sh"; do
   bash -n "$f"
 done
 (cd "$ROOT/backend" && gofmt -w cmd/citizen-launcher && go test ./... && go vet ./...)

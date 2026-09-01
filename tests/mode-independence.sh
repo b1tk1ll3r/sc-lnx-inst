@@ -9,7 +9,7 @@ root = Path(sys.argv[1])
 check = [
     root/'build.sh', root/'install-omarchy.sh', root/'INSTALLIEREN.sh',
     root/'tests/full-verify.sh', root/'tests/verify.sh', root/'tests/package-verify.sh',
-    root/'tests/gitea-release-helper.sh', root/'packaging/build-all.sh',
+    root/'tests/gitea-release-helper.sh', root/'tests/rpm-ci-footprint.sh', root/'packaging/build-all.sh',
     root/'.gitea/workflows/ci.yml', root/'.gitea/workflows/release.yml',
 ]
 for p in check:

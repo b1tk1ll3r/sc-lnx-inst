@@ -1,4 +1,4 @@
-# Citizen Launcher 1.1.2
+# Citizen Launcher 1.1.3
 
 Citizen Launcher is a cross-distribution Star Citizen setup, launch, repair and maintenance application for Linux. The same static Go core runs on Debian/Ubuntu, Fedora/RHEL derivatives, Arch derivatives, openSUSE and generic glibc-based desktop Linux. Omarchy support is an optional integration, not a runtime requirement.
 
@@ -8,7 +8,7 @@ Citizen Launcher is a cross-distribution Star Citizen setup, launch, repair and 
 
 The launcher owns the fragile user-space gaming stack so users do not have to pick Wine builds, copy DXVK DLLs or rebuild prefixes by hand. Kernel, GPU driver, firmware and base-distribution upgrades remain owned by the Linux distribution.
 
-The 1.0.1 gaming path was confirmed end-to-end on real hardware: launcher, RSI installation and Star Citizen playability. 1.1.2 keeps that gaming core and adds native multi-distribution packaging/update integration.
+The 1.0.1 gaming path was confirmed end-to-end on real hardware: launcher, RSI installation and Star Citizen playability. 1.1.3 keeps that gaming core, the multi-distribution packaging/update layer, and hardens Fedora RPM CI for small Gitea runners by staging build tools instead of installing the whole toolchain at once.
 
 ## Supported Linux families
 
@@ -32,25 +32,25 @@ The installer detects the distro family, prefers a native package found in `dist
 ### Debian / Ubuntu / Mint
 
 ```bash
-sudo apt install ./dist/citizen-launcher_1.1.2_amd64.deb
+sudo apt install ./dist/citizen-launcher_1.1.3_amd64.deb
 ```
 
 ### Fedora / Nobara / RHEL family
 
 ```bash
-sudo dnf install ./dist/citizen-launcher-1.1.2-1.linux.x86_64.rpm
+sudo dnf install ./dist/citizen-launcher-1.1.3-1.linux.x86_64.rpm
 ```
 
 ### openSUSE Tumbleweed / Slowroll
 
 ```bash
-sudo zypper install ./dist/citizen-launcher-1.1.2-1.linux.x86_64.rpm
+sudo zypper install ./dist/citizen-launcher-1.1.3-1.linux.x86_64.rpm
 ```
 
 ### Arch / Manjaro / EndeavourOS / CachyOS / Omarchy
 
 ```bash
-sudo pacman -U ./dist/citizen-launcher-1.1.2-1-x86_64.pkg.tar.zst
+sudo pacman -U ./dist/citizen-launcher-1.1.3-1-x86_64.pkg.tar.zst
 ```
 
 ### Generic / immutable desktop Linux

@@ -1,35 +1,31 @@
-# Citizen Launcher 1.1.2
+# Citizen Launcher 1.1.3
 
-## Gitea-native CI/CD release
+## Gitea Fedora/RPM runner hardening
 
-1.1.2 keeps the confirmed playable multi-distribution 1.1.x runtime and hardens the Gitea Actions pipeline introduced in 1.1.1.
+1.1.3 keeps the confirmed playable multi-distribution 1.1.x runtime and fixes the next real Gitea `act_runner` failure found in the Fedora RPM job.
 
-### Gitea workflows
+### Root cause
 
-- workflows now live exclusively under `.gitea/workflows/`
-- CI keeps the full Go/race/package verification plus Fedora RPM and Arch package builds
-- tag releases are created with Gitea's REST API and built-in `GITEA_TOKEN`
-- release publishing no longer depends on the `gh` CLI
-- release jobs upload `.deb`, `.rpm`, `.pkg.tar.zst`, generic tarball and one combined `SHA256SUMS.txt`
-- upload is idempotent: a rerun replaces same-named release attachments instead of duplicating them
+The previous workflow installed `git`, the full `golang` meta package, `rpm-build`, `systemd-rpm-macros`, `curl` and `python3` in one Fedora transaction. Fedora also enabled weak dependencies by default. On a small Docker root filesystem this expanded into hundreds of packages and exhausted `/` before the RPM build even started.
 
-### Gitea-aware self-update
+### Fix
 
-Packages produced by Gitea Actions embed an exact `gitea:<api-repository-url>` update source. The launcher can now resolve Gitea's latest-release API and hydrate per-asset SHA-256 values from the workflow-generated `SHA256SUMS.txt`. GitHub release sources remain supported for existing installations.
+- Fedora jobs now use `git-core` instead of the full Git package.
+- Go builds use `golang-bin` rather than the `golang` meta package, avoiding the large source package.
+- `systemd-rpm-macros`, Python and other unnecessary RPM-build dependencies are no longer installed in the Fedora build phase.
+- DNF weak dependencies are disabled and documentation payloads are skipped in CI containers.
+- DNF's root cache is redirected to the mounted Gitea workspace volume.
+- Downloaded RPM cache files are deleted after each transaction.
+- The static Go backend is built first, then `golang-bin` is removed before `rpm-build` is installed. The two heavy toolchains no longer occupy the container root simultaneously.
+- The Gitea release helper now supports a `jq` JSON backend, so the Fedora release job does not need the full Python runtime just to upload an RPM.
+- Disk usage is printed between phases to make future runner-capacity problems immediately visible.
 
-For privileged updates, a configured Gitea source must use HTTPS. This preserves the fail-closed package-update model.
+### Regression guards
 
-### Runner portability
-
-The release flow does not depend on cross-job `upload-artifact` compatibility. Each native build uploads its package directly to the Gitea Release, and the final job downloads those release attachments to create the checksum manifest. This works across a wider range of act_runner versions.
+- `tests/rpm-ci-footprint.sh` asserts the low-disk policy in both CI and release RPM jobs.
+- Gitea release-helper tests now exercise both Python and `jq` JSON backends.
+- The earlier `0644`/`Permission denied` workflow hardening remains in place.
 
 ### Runtime
 
 Wine, DXVK, RSI Launcher setup, hardware checks, single-instance protection, repair, support bundles and the already confirmed playable Star Citizen path are unchanged.
-## Gitea CI hardening
-
-- Gitea Actions invokes repository shell scripts explicitly through `bash`.
-- Nested test, build and release scripts use the same mode-independent convention.
-- Added a regression guard against direct `.sh` execution in the critical CI graph.
-- Fixes Gitea/act exit code 126 (`Permission denied`) when checkout files are mode `0644`.
-

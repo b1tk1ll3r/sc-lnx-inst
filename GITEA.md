@@ -1,6 +1,6 @@
 # Gitea Actions setup
 
-Citizen Launcher 1.1.2 uses Gitea Actions natively. Workflows are in `.gitea/workflows/`; the old `.github/workflows/` directory is intentionally absent.
+Citizen Launcher 1.1.3 uses Gitea Actions natively. Workflows are in `.gitea/workflows/`; the old `.github/workflows/` directory is intentionally absent.
 
 ## Requirements
 
@@ -26,8 +26,8 @@ If your runner uses a different label, replace `runs-on: ubuntu-latest` in both 
 Push a version tag matching `VERSION`, for example:
 
 ```bash
-git tag v1.1.2
-git push origin v1.1.2
+git tag v1.1.3
+git push origin v1.1.3
 ```
 
 `.gitea/workflows/release.yml` then:
@@ -70,3 +70,24 @@ Existing `github:owner/repo` and legacy `owner/repo` sources remain supported.
 ## Reruns
 
 The release helper `scripts/gitea-release.sh` is intentionally rerun-safe. Existing same-named attachments are removed before a replacement is uploaded, so rerunning a failed release does not create duplicate package assets.
+
+## Small runner / Fedora RPM jobs
+
+The Fedora jobs are intentionally written for constrained `act_runner` Docker roots. Do not replace the staged dependency setup with one large command such as:
+
+```text
+dnf install git golang rpm-build systemd-rpm-macros curl python3
+```
+
+That pulls Fedora's full Go source package, weak RPM build dependencies and other tooling at the same time and can exceed a small container root filesystem before `rpmbuild` starts.
+
+The 1.1.3 workflow instead:
+
+1. installs only `git-core` for checkout;
+2. stores DNF cache data on `${{ gitea.workspace }}` rather than `/var/cache/libdnf5`;
+3. disables weak dependencies and docs in the disposable build container;
+4. installs `golang-bin`, builds the static backend, then removes the compiler;
+5. installs `rpm-build` only after Go has been removed;
+6. uses `jq` instead of Python for the RPM release upload path.
+
+The workflow prints `df -h /` after the major phases. If a runner still cannot fit the native Fedora build after this reduction, increase the Docker/container root storage rather than silently dropping RPM verification.
