@@ -83,7 +83,7 @@ jobs:
       WORKSPACE: ${{ gitea.workspace }}
     steps:
       - name: Build dependencies
-        run: pacman -Syu --noconfirm --needed git go zstd curl python
+        run: pacman -Syu --noconfirm --needed git go zstd curl python nodejs
       - uses: actions/checkout@v4
       - name: Build backend
         run: bash ./build.sh
