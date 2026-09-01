@@ -1,8 +1,8 @@
-# Citizen Launcher 1.1.1
+# Citizen Launcher 1.1.2
 
 ## Gitea-native CI/CD release
 
-1.1.1 keeps the confirmed playable multi-distribution 1.1.x runtime and migrates the project automation from GitHub Actions to Gitea Actions.
+1.1.2 keeps the confirmed playable multi-distribution 1.1.x runtime and hardens the Gitea Actions pipeline introduced in 1.1.1.
 
 ### Gitea workflows
 
@@ -26,3 +26,10 @@ The release flow does not depend on cross-job `upload-artifact` compatibility. E
 ### Runtime
 
 Wine, DXVK, RSI Launcher setup, hardware checks, single-instance protection, repair, support bundles and the already confirmed playable Star Citizen path are unchanged.
+## Gitea CI hardening
+
+- Gitea Actions invokes repository shell scripts explicitly through `bash`.
+- Nested test, build and release scripts use the same mode-independent convention.
+- Added a regression guard against direct `.sh` execution in the critical CI graph.
+- Fixes Gitea/act exit code 126 (`Permission denied`) when checkout files are mode `0644`.
+

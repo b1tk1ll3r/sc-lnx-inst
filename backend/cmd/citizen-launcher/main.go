@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	appVersion  = "1.1.1"
+	appVersion  = "1.1.2"
 	releaseRepo = "github:sendnwv/omarchy-sc"
 )
 

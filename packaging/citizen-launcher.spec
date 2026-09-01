@@ -104,5 +104,7 @@ fi
 %config(noreplace) %{_sysconfdir}/citizen-launcher/release-repo
 
 %changelog
+* Tue Sep 01 2026 Citizen Launcher Project - 1.1.2-1
+- Gitea Actions checkout permission hardening
 * Tue Sep 01 2026 Citizen Launcher Project - 1.1.1-1
 - Multi-distribution native package support

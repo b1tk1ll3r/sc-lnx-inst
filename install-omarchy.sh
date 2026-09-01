@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-"$ROOT/install.sh"
+bash "$ROOT/install.sh"
 command -v omarchy >/dev/null 2>&1 || { echo "Omarchy nicht gefunden; Standalone-Launcher ist trotzdem installiert."; exit 0; }
 DEST="$HOME/.config/omarchy/plugins/local.omarchy-citizen"
 mkdir -p "$DEST/backend/bin"

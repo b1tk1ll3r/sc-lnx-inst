@@ -38,7 +38,7 @@ esac
 if $immutable; then
   echo "Immutable Linux-Variante erkannt ($id${variant:+/$variant})."
   echo "Citizen Launcher wird sicher im Benutzerkonto installiert; das Basis-Image bleibt unangetastet."
-  exec "$ROOT/install.sh"
+  exec bash "$ROOT/install.sh"
 fi
 
 case "$family" in
@@ -80,4 +80,4 @@ esac
 
 echo "Kein passendes natives Paket im Projektordner gefunden."
 echo "Installiere die portable, vollständig updatefähige Benutzer-Version …"
-exec "$ROOT/install.sh"
+exec bash "$ROOT/install.sh"

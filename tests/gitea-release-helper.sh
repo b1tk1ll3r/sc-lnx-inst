@@ -25,7 +25,7 @@ class H(http.server.BaseHTTPRequestHandler):
         return r
     def do_GET(self):
         path=urllib.parse.urlparse(self.path).path
-        if path.endswith('/releases/tags/v1.1.1'):
+        if path.endswith('/releases/tags/v1.1.2'):
             if release is None: self.send_error(404); return
             self.sendj(200,self.rel()); return
         if path.startswith('/download/'):
@@ -78,12 +78,12 @@ export GITEA_API_URL="http://127.0.0.1:${PORT}/api/v1"
 export GITEA_REPOSITORY="owner/repo"
 export GITEA_TOKEN="test-token"
 
-echo first > "$TMP/citizen-launcher_1.1.1_amd64.deb"
-"$ROOT/scripts/gitea-release.sh" ensure v1.1.1 'Citizen Launcher 1.1.1' "$ROOT/RELEASE_NOTES.md" deadbeef
-"$ROOT/scripts/gitea-release.sh" ensure v1.1.1 'Citizen Launcher 1.1.1' "$ROOT/RELEASE_NOTES.md" deadbeef
-"$ROOT/scripts/gitea-release.sh" upload v1.1.1 "$TMP/citizen-launcher_1.1.1_amd64.deb"
-echo replacement > "$TMP/citizen-launcher_1.1.1_amd64.deb"
-"$ROOT/scripts/gitea-release.sh" upload v1.1.1 "$TMP/citizen-launcher_1.1.1_amd64.deb"
-"$ROOT/scripts/gitea-release.sh" download-assets v1.1.1 "$TMP/download"
-cmp "$TMP/citizen-launcher_1.1.1_amd64.deb" "$TMP/download/citizen-launcher_1.1.1_amd64.deb"
+echo first > "$TMP/citizen-launcher_1.1.2_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.2 'Citizen Launcher 1.1.2' "$ROOT/RELEASE_NOTES.md" deadbeef
+bash "$ROOT/scripts/gitea-release.sh" ensure v1.1.2 'Citizen Launcher 1.1.2' "$ROOT/RELEASE_NOTES.md" deadbeef
+bash "$ROOT/scripts/gitea-release.sh" upload v1.1.2 "$TMP/citizen-launcher_1.1.2_amd64.deb"
+echo replacement > "$TMP/citizen-launcher_1.1.2_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" upload v1.1.2 "$TMP/citizen-launcher_1.1.2_amd64.deb"
+bash "$ROOT/scripts/gitea-release.sh" download-assets v1.1.2 "$TMP/download"
+cmp "$TMP/citizen-launcher_1.1.2_amd64.deb" "$TMP/download/citizen-launcher_1.1.2_amd64.deb"
 echo 'Gitea release helper verification: OK'

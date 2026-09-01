@@ -4,8 +4,8 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 rm -rf "$ROOT/dist"
 mkdir -p "$ROOT/dist"
-"$ROOT/packaging/build-deb.sh"
-"$ROOT/packaging/build-tarball.sh"
+bash "$ROOT/packaging/build-deb.sh"
+bash "$ROOT/packaging/build-tarball.sh"
 DEB="$ROOT/dist/citizen-launcher_${VERSION}_amd64.deb"
 TAR="$ROOT/dist/citizen-launcher-${VERSION}-linux-amd64.tar.gz"
 [[ -s "$DEB" && -s "$TAR" ]]
@@ -45,14 +45,14 @@ grep -q "'x86_64'" "$ROOT/packaging/arch/PKGBUILD.in"
 grep -q 'citizen-launcher-self-update.timer' "$ROOT/packaging/arch/PKGBUILD.in"
 
 if command -v rpmbuild >/dev/null 2>&1; then
-  "$ROOT/packaging/build-rpm.sh"
+  bash "$ROOT/packaging/build-rpm.sh"
   RPM="$ROOT/dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
   [[ -s "$RPM" ]]
   rpm -qp --qf '%{NAME}\n%{VERSION}\n%{ARCH}\n' "$RPM" | grep -qx 'citizen-launcher' -m1
 fi
 
 if command -v makepkg >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then
-  "$ROOT/packaging/build-arch.sh"
+  bash "$ROOT/packaging/build-arch.sh"
   [[ -s "$ROOT/dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst" ]]
 fi
 

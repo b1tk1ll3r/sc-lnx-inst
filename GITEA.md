@@ -1,6 +1,6 @@
 # Gitea Actions setup
 
-Citizen Launcher 1.1.1 uses Gitea Actions natively. Workflows are in `.gitea/workflows/`; the old `.github/workflows/` directory is intentionally absent.
+Citizen Launcher 1.1.2 uses Gitea Actions natively. Workflows are in `.gitea/workflows/`; the old `.github/workflows/` directory is intentionally absent.
 
 ## Requirements
 
@@ -26,8 +26,8 @@ If your runner uses a different label, replace `runs-on: ubuntu-latest` in both 
 Push a version tag matching `VERSION`, for example:
 
 ```bash
-git tag v1.1.1
-git push origin v1.1.1
+git tag v1.1.2
+git push origin v1.1.2
 ```
 
 `.gitea/workflows/release.yml` then:
