@@ -28,7 +28,7 @@ jobs:
     name: Tag matches VERSION
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - run: |
@@ -56,14 +56,14 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
           cache: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pkg-*
           path: release-assets
@@ -99,7 +99,7 @@ jobs:
           base64 -d "$ASSETS/SHA256SUMS.txt.sig" > "$RUNNER_TEMP/sig.bin"
           openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/release.pem" -rawin \
             -in "$ASSETS/SHA256SUMS.txt" -sigfile "$RUNNER_TEMP/sig.bin"
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: release-assets/*
       - name: Create or update release
