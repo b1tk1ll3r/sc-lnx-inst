@@ -1,0 +1,149 @@
+# Tag-driven release: push a tag `vX.Y.Z` that matches VERSION.
+# All packages are built by the same reusable pipeline as CI, then published in
+# one step together with install.sh, SHA256SUMS.txt, its Ed25519 signature
+# (SHA256SUMS.txt.sig) and build-provenance attestations. Finally the published
+# release is installed end-to-end with install.sh on every supported family.
+#
+# Required repository secret: RELEASE_SIGNING_KEY (base64 Ed25519 seed, see
+# README "Release signing key").
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-tag:
+    name: Tag matches VERSION
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$GITHUB_REF_NAME" != "v${VERSION}" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file (v${VERSION})"
+            exit 1
+          fi
+
+  packages:
+    name: Build
+    needs: check-tag
+    uses: ./.github/workflows/packages.yml
+    with:
+      release-repo: github:${{ github.repository }}
+
+  publish:
+    name: Sign and publish GitHub release
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: release-assets
+          merge-multiple: true
+      - name: Check assets and create SHA256SUMS.txt
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          install -m644 install.sh release-assets/install.sh
+          cd release-assets
+          for f in \
+            "citizen-launcher_${VERSION}_amd64.deb" \
+            "citizen-launcher-${VERSION}-1.linux.x86_64.rpm" \
+            "citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst" \
+            "citizen-launcher-${VERSION}-linux-amd64.tar.gz" \
+            install.sh; do
+            test -s "$f" || { echo "::error::missing release asset $f"; exit 1; }
+          done
+          sha256sum -- * | LC_ALL=C sort -k2 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Sign SHA256SUMS.txt
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [[ -z "$RELEASE_SIGNING_KEY" ]]; then
+            echo "::error::Repository secret RELEASE_SIGNING_KEY is not set; refusing to publish an unsigned release."
+            exit 1
+          fi
+          ASSETS="$PWD/release-assets"
+          (cd backend && go run ./cmd/release-sign sign "$ASSETS/SHA256SUMS.txt")
+          (cd backend && go run ./cmd/release-sign verify "$ASSETS/SHA256SUMS.txt")
+          # Same check install.sh performs on user machines.
+          (cd backend && go run ./cmd/release-sign pem) > "$RUNNER_TEMP/release.pem"
+          base64 -d "$ASSETS/SHA256SUMS.txt.sig" > "$RUNNER_TEMP/sig.bin"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/release.pem" -rawin \
+            -in "$ASSETS/SHA256SUMS.txt" -sigfile "$RUNNER_TEMP/sig.bin"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/*
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Rerun-safe: replace same-named assets.
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            flags=()
+            [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+            gh release create "$TAG" release-assets/* \
+              --verify-tag \
+              --title "Citizen Launcher ${VERSION}" \
+              --notes-file RELEASE_NOTES.md \
+              "${flags[@]}"
+          fi
+
+  install-e2e:
+    name: install.sh end-to-end (${{ matrix.image }})
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:13', 'ubuntu:24.04', 'fedora:44', 'opensuse/tumbleweed', 'archlinux:latest']
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install prerequisites
+        run: |
+          if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq wget openssl ca-certificates >/dev/null
+          elif command -v dnf >/dev/null; then dnf -y -q install wget2-wget openssl || dnf -y -q install wget openssl
+          elif command -v zypper >/dev/null; then zypper --non-interactive -q install wget openssl
+          elif command -v pacman >/dev/null; then pacman -Syu --noconfirm --needed wget openssl
+          fi
+      - name: Install published release via the documented one-liner
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash <(wget -qO- "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh") --version "$VERSION"
+          test "$(citizen-launcher --version)" = "$VERSION"
+          bash <(wget -qO- "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh") --uninstall
+          hash -r; ! command -v citizen-launcher

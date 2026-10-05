@@ -1,0 +1,7 @@
+# Build outputs – release artefacts are published as signed GitHub Release assets.
+/dist/
+/backend/bin/
+/release-assets/
+# Never commit release signing keys.
+*.key
+*.pem

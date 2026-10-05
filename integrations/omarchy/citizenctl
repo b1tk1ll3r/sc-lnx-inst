@@ -65,7 +65,11 @@ notify_error() {
 }
 
 find_backend() {
-  if [[ -x "$BACKEND_EXTERNAL" ]]; then
+  # Prefer the installed launcher (native package or ~/.local/bin); it is the
+  # copy kept up to date by the self-updater.
+  if command -v citizen-launcher >/dev/null 2>&1; then
+    command -v citizen-launcher
+  elif [[ -x "$BACKEND_EXTERNAL" ]]; then
     printf '%s\n' "$BACKEND_EXTERNAL"
   elif [[ -x "$BACKEND_BUNDLED" ]]; then
     printf '%s\n' "$BACKEND_BUNDLED"

@@ -1,0 +1,222 @@
+# Reusable pipeline: regression suite, one static backend build and native
+# packages for every supported family. Called by ci.yml and release.yml so CI
+# exercises exactly the release build path.
+name: Build and verify packages
+
+on:
+  workflow_call:
+    inputs:
+      release-repo:
+        description: Self-update source embedded into the binary and /etc/citizen-launcher/release-repo
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CITIZEN_LAUNCHER_RELEASE_REPO: ${{ inputs.release-repo }}
+
+defaults:
+  run:
+    # Container jobs default to `sh`; force bash with -eo pipefail everywhere.
+    shell: bash
+
+jobs:
+  verify:
+    name: Regression suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Install verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-yaml dpkg-dev zstd jq shellcheck openssl
+      - name: ShellCheck (errors only)
+        run: shellcheck -S error $(git ls-files '*.sh') integrations/omarchy/citizenctl
+      - name: Full regression suite
+        run: bash ./tests/full-verify.sh
+
+  backend:
+    name: Static backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Build
+        run: bash ./build.sh
+      - name: Check version and linkage
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          test "$(./backend/bin/citizen-launcher --version)" = "$VERSION"
+          file backend/bin/citizen-launcher | tee /dev/stderr | grep -q 'statically linked'
+          readelf -n backend/bin/citizen-launcher | grep -q 'GNU_BUILD_ID'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-bin
+          path: backend/bin/citizen-launcher
+          if-no-files-found: error
+          retention-days: 7
+
+  deb:
+    name: Debian package + generic tarball
+    needs: backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-bin
+          path: backend/bin
+      - name: Build and verify .deb and tarball
+        run: |
+          chmod 0755 backend/bin/citizen-launcher
+          bash ./tests/package-verify.sh
+      - name: Install smoke test (Debian 13, Ubuntu 24.04)
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          for image in debian:13 ubuntu:24.04; do
+            echo "::group::$image"
+            docker run --rm -v "$PWD/dist:/dist:ro" -e VERSION="$VERSION" "$image" bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq "/dist/citizen-launcher_${VERSION}_amd64.deb" >/dev/null
+              test "$(citizen-launcher --version)" = "$VERSION"
+              test -f /etc/citizen-launcher/release-repo
+              apt-get remove -y -qq citizen-launcher >/dev/null
+              hash -r; ! command -v citizen-launcher'
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-deb
+          path: |
+            dist/citizen-launcher_*_amd64.deb
+            dist/citizen-launcher-*-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  rpm:
+    name: RPM package (Fedora)
+    needs: backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: fedora:44
+    steps:
+      - name: Install build tools
+        run: |
+          dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install git-core rpm-build
+          dnf clean all
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-bin
+          path: backend/bin
+      - name: Build RPM
+        run: |
+          chmod 0755 backend/bin/citizen-launcher
+          bash ./packaging/build-rpm.sh
+      - name: Inspect RPM
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          RPM="dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
+          rpm -qpi "$RPM"
+          rpm -qpl "$RPM"
+          test "$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "$RPM")" = "citizen-launcher ${VERSION} x86_64"
+          # No debuginfo/build-id artefacts may leak into the payload.
+          ! rpm -qpl "$RPM" | grep -q '/usr/lib/.build-id'
+      - name: Install smoke test (Fedora)
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          dnf -y --setopt=install_weak_deps=False install "./dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
+          test "$(citizen-launcher --version)" = "$VERSION"
+          rpm -V citizen-launcher
+          dnf -y remove citizen-launcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-rpm
+          path: dist/citizen-launcher-*-1.linux.x86_64.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  rpm-opensuse:
+    name: RPM install smoke test (openSUSE Tumbleweed)
+    needs: rpm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: opensuse/tumbleweed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-rpm
+          path: dist
+      - name: Install and run
+        run: |
+          RPM="$(ls dist/citizen-launcher-*-1.linux.x86_64.rpm)"
+          VERSION="$(rpm -qp --qf '%{VERSION}' "$RPM")"
+          zypper --non-interactive refresh
+          zypper --non-interactive install --allow-unsigned-rpm "$RPM"
+          test "$(citizen-launcher --version)" = "$VERSION"
+          rpm -V citizen-launcher
+
+  arch:
+    name: pacman package (Arch Linux)
+    needs: backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install build tools
+        run: pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-bin
+          path: backend/bin
+      - name: Build package as unprivileged user
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          chmod 0755 backend/bin/citizen-launcher
+          # makepkg refuses to run as root; build in a private copy owned by an
+          # unprivileged user so the workspace itself stays root-owned.
+          useradd -m builder
+          BUILD=/tmp/pkgbuild/src
+          mkdir -p "$BUILD"
+          cp -a . "$BUILD"
+          chown -R builder:builder /tmp/pkgbuild
+          (cd "$BUILD" && runuser -u builder -- env "CITIZEN_LAUNCHER_RELEASE_REPO=$CITIZEN_LAUNCHER_RELEASE_REPO" bash ./packaging/build-arch.sh)
+          mkdir -p dist
+          cp "$BUILD/dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst" dist/
+      - name: Install smoke test (Arch)
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          pacman -U --noconfirm "dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst"
+          test "$(citizen-launcher --version)" = "$VERSION"
+          pacman -Qkk citizen-launcher
+          pacman -R --noconfirm citizen-launcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-arch
+          path: dist/citizen-launcher-*-1-x86_64.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 7

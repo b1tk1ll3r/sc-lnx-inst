@@ -1,0 +1,10 @@
+# Shell scripts, Go sources, specs and units must keep LF even on Windows
+# checkouts (core.autocrlf=true would otherwise produce CRLF that breaks bash
+# shebangs, gofmt and rpmbuild).
+* text=auto eol=lf
+*.deb binary
+*.rpm binary
+*.zst binary
+*.tar.gz binary
+*.svg text eol=lf
+backend/bin/** binary

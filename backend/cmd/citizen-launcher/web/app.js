@@ -1,4 +1,4 @@
-const B=window.CITIZEN_BASE;let current=null,activeJob=null;const $=id=>document.getElementById(id);
+const B='';let current=null,activeJob=null;const $=id=>document.getElementById(id);
 async function api(path,opts){const r=await fetch(B+path,opts);if(!r.ok)throw new Error((await r.text()).trim());return r.json()}
 function cls(el,state){el.classList.remove('good','bad','warn');if(state)el.classList.add(state)}
 function txt(id,v,c){const e=$(id);const value=(v===undefined||v===null||v==='')?'—':String(v);e.textContent=value;e.title=value;cls(e,c)}

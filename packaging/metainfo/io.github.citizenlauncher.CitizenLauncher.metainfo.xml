@@ -10,7 +10,7 @@
     <p>Citizen Launcher manages a locally compatible Wine runner, DXVK, RSI Launcher compatibility, automatic maintenance and support diagnostics for Star Citizen on Linux.</p>
   </description>
   <launchable type="desktop-id">io.github.citizenlauncher.CitizenLauncher.desktop</launchable>
-  <url type="homepage">https://github.com/sendnwv/omarchy-sc</url>
+  <url type="homepage">https://github.com/b1tk1ll3r/sc-lnx-inst</url>
   <categories><category>Game</category></categories>
   <provides><binary>citizen-launcher</binary></provides>
   <releases><release version="1.1.3" date="2026-09-01"/><release version="1.1.1" date="2026-09-01"/><release version="1.0.1" date="2026-08-31"/><release version="1.0.0" date="2026-08-31"/></releases>

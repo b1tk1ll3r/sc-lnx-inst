@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,9 +15,13 @@ import (
 	"time"
 )
 
+// guiInstanceInfo lets a second `citizen-launcher gui` call ask the running
+// instance for a fresh one-time login URL. The file is 0600 in the user's
+// state dir; Control is the only credential that can mint login URLs.
 type guiInstanceInfo struct {
 	PID     int    `json:"pid"`
-	URL     string `json:"url"`
+	Addr    string `json:"addr"`
+	Control string `json:"control"`
 	Started string `json:"started"`
 }
 
@@ -53,25 +59,50 @@ func (a *App) writeGUIInfo(info guiInstanceInfo) error {
 	return atomicWriteFile(a.guiInfoPath(), b, 0o600)
 }
 
+// existingGUIURL asks the running GUI instance for a new one-time login URL.
 func (a *App) existingGUIURL() (string, bool) {
 	for i := 0; i < 12; i++ {
-		b, err := os.ReadFile(a.guiInfoPath())
-		if err == nil {
-			var info guiInstanceInfo
-			if json.Unmarshal(b, &info) == nil && info.URL != "" && processAlive(info.PID) {
-				client := &http.Client{Timeout: 500 * time.Millisecond}
-				resp, err := client.Get(strings.TrimRight(info.URL, "/") + "/api/ping")
-				if err == nil {
-					_ = resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						return info.URL, true
-					}
-				}
-			}
+		if u, ok := a.requestGUILoginURL(); ok {
+			return u, true
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	return "", false
+}
+
+func (a *App) requestGUILoginURL() (string, bool) {
+	b, err := os.ReadFile(a.guiInfoPath())
+	if err != nil {
+		return "", false
+	}
+	var info guiInstanceInfo
+	if json.Unmarshal(b, &info) != nil || info.Addr == "" || info.Control == "" || !processAlive(info.PID) {
+		return "", false
+	}
+	host, _, err := net.SplitHostPort(info.Addr)
+	if err != nil || host != "127.0.0.1" {
+		return "", false
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://"+info.Addr+guiControlPath, nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set(guiControlHeader, info.Control)
+	resp, err := (&http.Client{Timeout: 500 * time.Millisecond}).Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out) != nil || !strings.HasPrefix(out.URL, "http://"+info.Addr+"/") {
+		return "", false
+	}
+	return out.URL, true
 }
 
 func processAlive(pid int) bool {

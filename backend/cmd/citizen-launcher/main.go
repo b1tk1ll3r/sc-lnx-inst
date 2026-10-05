@@ -17,7 +17,7 @@ import (
 
 var (
 	appVersion  = "1.1.3"
-	releaseRepo = "github:sendnwv/omarchy-sc"
+	releaseRepo = "github:b1tk1ll3r/sc-lnx-inst"
 )
 
 const (
@@ -279,10 +279,17 @@ func main() {
 	}
 }
 
+// rootStateHome is used when the system self-update timer runs as root:
+// systemd does not set $HOME for system services without User=.
+const rootStateHome = "/var/lib/citizen-launcher"
+
 func newApp() (*App, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		if os.Geteuid() != 0 {
+			return nil, err
+		}
+		home = rootStateHome
 	}
 	self, _ := os.Executable()
 	self, _ = filepath.EvalSymlinks(self)

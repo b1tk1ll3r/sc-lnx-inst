@@ -30,6 +30,7 @@ done
 mkdir -p "$TMP/tar"
 tar -xzf "$TAR" -C "$TMP/tar"
 [[ "$("$TMP/tar/citizen-launcher" --version)" == "$VERSION" ]]
+[[ -s "$TMP/tar/citizen-launcher.svg" ]]
 grep -q '^Exec=/usr/bin/citizen-launcher gui$' "$TMP/root/usr/share/applications/io.github.citizenlauncher.CitizenLauncher.desktop"
 grep -q '^ExecStart=/usr/bin/citizen-launcher self-update apply --system --quiet$' "$TMP/root/usr/lib/systemd/system/citizen-launcher-self-update.service"
 grep -q 'zstd' <(dpkg-deb -f "$DEB" Depends)
@@ -37,7 +38,8 @@ grep -q 'zstd' <(dpkg-deb -f "$DEB" Depends)
 # Packaging definitions for the other native families are validated on every
 # host; their actual package builders are executed when their native tools exist
 # and in GitHub's Fedora/Arch CI jobs.
-bash -n "$ROOT/INSTALLIEREN.sh" "$ROOT/packaging/build-rpm.sh" "$ROOT/packaging/build-arch.sh" "$ROOT/packaging/build-all.sh"
+# Note: `bash -n a b` would only check `a`; check each file.
+for f in "$ROOT/install.sh" "$ROOT/packaging/build-rpm.sh" "$ROOT/packaging/build-arch.sh" "$ROOT/packaging/build-all.sh"; do bash -n "$f"; done
 grep -q '^Name:[[:space:]]*citizen-launcher$' "$ROOT/packaging/rpm/citizen-launcher.spec"
 grep -q 'citizen-launcher-self-update.timer' "$ROOT/packaging/rpm/citizen-launcher.spec"
 grep -q '^pkgname=citizen-launcher$' "$ROOT/packaging/arch/PKGBUILD.in"

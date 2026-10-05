@@ -710,7 +710,7 @@ func yamlScalar(v string) string {
 func (a *App) latestRSIInstaller() (string, string, string, error) {
 	req, _ := http.NewRequest("GET", rsiLatestYML, nil)
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := httpsClient(45 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", "", err
@@ -731,16 +731,26 @@ func (a *App) latestRSIInstaller() (string, string, string, error) {
 	if err != nil {
 		return "", "", "", fmt.Errorf("RSI Installer-Pfad ungültig: %w", err)
 	}
-	if ref.IsAbs() {
-		return filepath.Base(ref.Path), ref.String(), sha, nil
-	}
 	base, _ := neturl.Parse(rsiBaseURL + "/")
-	return filepath.Base(ref.Path), base.ResolveReference(ref).String(), sha, nil
+	resolved := base.ResolveReference(ref)
+	// The installer is executed afterwards; only accept it from CIG's HTTPS
+	// installer host and only together with the published SHA-512.
+	if resolved.Scheme != "https" || resolved.Host != base.Host {
+		return "", "", "", fmt.Errorf("RSI Installer-URL außerhalb von %s abgelehnt: %s", base.Host, resolved.Redacted())
+	}
+	if strings.TrimSpace(sha) == "" {
+		return "", "", "", errors.New("RSI latest.yml enthält keine sha512-Prüfsumme; Installer wird nicht ungeprüft ausgeführt")
+	}
+	name := filepath.Base(resolved.Path)
+	if name == "." || name == "/" || !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return "", "", "", fmt.Errorf("RSI Installer-Dateiname ungültig: %q", name)
+	}
+	return name, resolved.String(), sha, nil
 }
 
 func verifySHA512Base64(path, want string) error {
 	if strings.TrimSpace(want) == "" {
-		return nil
+		return fmt.Errorf("keine SHA-512-Prüfsumme für %s", filepath.Base(path))
 	}
 	f, err := os.Open(path)
 	if err != nil {

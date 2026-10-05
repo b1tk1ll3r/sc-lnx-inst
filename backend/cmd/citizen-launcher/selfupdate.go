@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"citizen-launcher/backend/internal/signing"
 )
 
 type SelfUpdateStatus struct {
@@ -44,6 +46,8 @@ func packageAutoUpdateActive() bool {
 	}
 	return exec.Command("systemctl", "is-enabled", "citizen-launcher-self-update.timer").Run() == nil
 }
+
+var stableVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 var releaseRepoPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
@@ -118,7 +122,7 @@ func effectiveReleaseRepo() string {
 	if validReleaseRepo(releaseRepo) {
 		return releaseRepo
 	}
-	return "github:sendnwv/omarchy-sc"
+	return "github:b1tk1ll3r/sc-lnx-inst"
 }
 
 func launcherLatestRelease(spec string) (githubRelease, error) {
@@ -138,7 +142,7 @@ func launcherLatestRelease(spec string) (githubRelease, error) {
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := httpsClient(30 * time.Second)
 		resp, doErr := client.Do(req)
 		if doErr != nil {
 			return githubRelease{}, doErr
@@ -154,56 +158,95 @@ func launcherLatestRelease(spec string) (githubRelease, error) {
 	if err != nil {
 		return githubRelease{}, err
 	}
-	// Gitea release attachments do not currently expose GitHub's per-asset
-	// digest field. Release workflows publish SHA256SUMS.txt, which is resolved
-	// here into the same digest field used by the fail-closed updater.
-	if err := hydrateReleaseChecksums(&rel); err != nil {
+	// Every launcher release must carry SHA256SUMS.txt plus an Ed25519
+	// signature by the project release key. Asset digests are taken only from
+	// the signed manifest; GitHub's own API digest is merely cross-checked.
+	if err := applySignedChecksums(&rel); err != nil {
 		return githubRelease{}, err
 	}
 	return rel, nil
 }
 
-func hydrateReleaseChecksums(rel *githubRelease) error {
+const (
+	checksumAssetName  = "SHA256SUMS.txt"
+	signatureAssetName = "SHA256SUMS.txt.sig"
+)
+
+func applySignedChecksums(rel *githubRelease) error {
 	if rel == nil {
 		return errors.New("nil release")
 	}
-	checksumURL := ""
+	var sumsURL, sigURL string
 	for _, asset := range rel.Assets {
-		if asset.Name == "SHA256SUMS.txt" {
-			checksumURL = asset.BrowserDownloadURL
-			break
+		switch asset.Name {
+		case checksumAssetName:
+			sumsURL = asset.BrowserDownloadURL
+		case signatureAssetName:
+			sigURL = asset.BrowserDownloadURL
 		}
 	}
-	if checksumURL == "" {
-		return nil
+	if sumsURL == "" || sigURL == "" {
+		return fmt.Errorf("release %s is not signed (%s/%s missing); refusing update", rel.TagName, checksumAssetName, signatureAssetName)
 	}
-	req, err := http.NewRequest("GET", checksumURL, nil)
+	sums, err := fetchSmall(sumsURL, 2<<20)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", checksumAssetName, err)
+	}
+	sig, err := fetchSmall(sigURL, 4<<10)
+	if err != nil {
+		return fmt.Errorf("%s: %w", signatureAssetName, err)
+	}
+	return applyVerifiedChecksums(rel, sums, sig, signing.PublicKeys)
+}
+
+// applyVerifiedChecksums verifies the manifest signature and replaces every
+// asset digest with the signed value. Assets missing from the manifest lose
+// their digest and therefore can never be installed (fail closed).
+func applyVerifiedChecksums(rel *githubRelease, sums, sig []byte, keys []string) error {
+	if err := signing.VerifyWith(keys, sums, sig); err != nil {
+		return fmt.Errorf("release %s: %w", rel.TagName, err)
+	}
+	checksums := parseSHA256SUMS(string(sums))
+	for i := range rel.Assets {
+		a := &rel.Assets[i]
+		signed := checksums[a.Name]
+		if signed == "" {
+			a.Digest = ""
+			continue
+		}
+		if api := strings.ToLower(strings.TrimSpace(a.Digest)); strings.HasPrefix(api, "sha256:") && api != "sha256:"+signed {
+			return fmt.Errorf("release asset %s: API digest differs from signed checksum", a.Name)
+		}
+		a.Digest = "sha256:" + signed
+	}
+	return nil
+}
+
+func fetchSmall(rawURL string, limit int64) ([]byte, error) {
+	if err := requireHTTPS(rawURL); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := httpsClient(30 * time.Second).Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("release checksum download returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("download returned HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	checksums := parseSHA256SUMS(string(data))
-	for i := range rel.Assets {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rel.Assets[i].Digest)), "sha256:") {
-			continue
-		}
-		if sum := checksums[rel.Assets[i].Name]; sum != "" {
-			rel.Assets[i].Digest = "sha256:" + sum
-		}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file exceeds %d bytes", limit)
 	}
-	return nil
+	return data, nil
 }
 
 func parseSHA256SUMS(body string) map[string]string {
@@ -260,8 +303,10 @@ func (a *App) selfUpdateStatus(fetch bool) (SelfUpdateStatus, error) {
 		return st, err
 	}
 	latest := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
-	if latest == "" {
-		err := errors.New("latest release has no usable version tag")
+	// Only plain X.Y.Z tags are update targets: the version is embedded in
+	// asset regexes and cache paths, and compareVersions ignores suffixes.
+	if !stableVersionPattern.MatchString(latest) {
+		err := fmt.Errorf("latest release tag %q is not a stable X.Y.Z version", release.TagName)
 		st.State, st.Error = "check-failed", err.Error()
 		return st, err
 	}
@@ -425,6 +470,10 @@ func (a *App) releaseAssetForMode(release githubRelease, version, mode string) (
 	}
 	for _, re := range res {
 		for _, asset := range release.Assets {
+			// The name becomes a path below the (root-owned) cache directory.
+			if filepath.Base(asset.Name) != asset.Name || strings.ContainsAny(asset.Name, "/\\") {
+				continue
+			}
 			if re.MatchString(asset.Name) {
 				return asset, nil
 			}
@@ -706,7 +755,10 @@ func extractSingleBinaryTarGz(path, dir string) error {
 		if err != nil {
 			return err
 		}
-		_, copyErr := io.Copy(out, tr)
+		n, copyErr := io.Copy(out, io.LimitReader(tr, 512<<20+1))
+		if copyErr == nil && n > 512<<20 {
+			copyErr = errors.New("citizen-launcher binary in tarball exceeds 512 MiB")
+		}
 		closeErr := out.Close()
 		if copyErr != nil {
 			return copyErr

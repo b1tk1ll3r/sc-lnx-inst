@@ -7,10 +7,11 @@ from pathlib import Path
 import re, sys
 root = Path(sys.argv[1])
 check = [
-    root/'build.sh', root/'install-omarchy.sh', root/'INSTALLIEREN.sh',
+    root/'build.sh', root/'install.sh', root/'integrations/omarchy/install.sh',
+    root/'tests/installer-test.sh', root/'tests/smoke-citizenctl.sh',
     root/'tests/full-verify.sh', root/'tests/verify.sh', root/'tests/package-verify.sh',
-    root/'tests/gitea-release-helper.sh', root/'tests/rpm-ci-footprint.sh', root/'packaging/build-all.sh',
-    root/'.gitea/workflows/ci.yml', root/'.gitea/workflows/release.yml',
+    root/'tests/workflow-policy.sh', root/'packaging/build-all.sh',
+    *sorted((root/'.github/workflows').glob('*.yml')),
 ]
 for p in check:
     text = p.read_text()

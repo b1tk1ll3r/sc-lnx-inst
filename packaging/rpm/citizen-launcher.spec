@@ -1,9 +1,19 @@
+# The payload is a prebuilt, stripped, static Go binary (see packaging/build-rpm.sh).
+# There is nothing to compile and no debug sources, so debuginfo/debugsource
+# subpackages and /usr/lib/.build-id links must not be generated. Without this,
+# rpmbuild on Fedora/openSUSE aborts with "Empty %files file debugsourcefiles.list"
+# or "Missing build-id" depending on the Go toolchain that produced the binary.
+%global debug_package %{nil}
+%global _build_id_links none
+%global _missing_build_ids_terminate_build 0
+%global __strip /bin/true
+
 Name:           citizen-launcher
 Version:        %{cl_version}
 Release:        1
 Summary:        Star Citizen setup, launcher and self-maintaining gaming stack for Linux
 License:        MIT
-URL:            https://github.com/sendnwv/omarchy-sc
+URL:            https://github.com/b1tk1ll3r/sc-lnx-inst
 BuildArch:      x86_64
 AutoReqProv:    no
 
@@ -99,8 +109,9 @@ fi
 %{_unitdir}/citizen-launcher-self-update.service
 %{_unitdir}/citizen-launcher-self-update.timer
 %{_prefix}/lib/sysctl.d/90-citizen-launcher.conf
-%{_sysconfdir}/security/limits.d/90-citizen-launcher.conf
-%{_sysconfdir}/xdg/autostart/citizen-launcher-migrate.desktop
+%config(noreplace) %{_sysconfdir}/security/limits.d/90-citizen-launcher.conf
+%config(noreplace) %{_sysconfdir}/xdg/autostart/citizen-launcher-migrate.desktop
+%dir %{_sysconfdir}/citizen-launcher
 %config(noreplace) %{_sysconfdir}/citizen-launcher/release-repo
 
 %changelog

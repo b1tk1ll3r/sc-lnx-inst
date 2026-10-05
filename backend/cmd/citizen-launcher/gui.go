@@ -202,12 +202,11 @@ func (a *App) runGUI(args []string) error {
 	if err != nil {
 		return err
 	}
-	tokenBytes := make([]byte, 18)
-	if _, err := rand.Read(tokenBytes); err != nil {
+	auth, err := newGUIAuth(listener.Addr().String())
+	if err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("sicheres GUI-Token konnte nicht erzeugt werden: %w", err)
 	}
-	base := "/" + hex.EncodeToString(tokenBytes)
 	jobs := &jobStore{jobs: map[string]*GUIJob{}}
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(guiFiles, "web")
@@ -217,19 +216,24 @@ func (a *App) runGUI(args []string) error {
 	touch := func() { activityMu.Lock(); lastActivity = time.Now(); activityMu.Unlock() }
 	secure := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			touch()
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+			next.ServeHTTP(w, r)
+		})
+	}
+	authenticated := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			touch()
 			next.ServeHTTP(w, r)
 		})
 	}
 
-	mux.Handle(base+"/assets/", http.StripPrefix(base+"/assets/", http.FileServer(http.FS(sub))))
-	mux.HandleFunc(base+"/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != base+"/" {
+	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(sub))))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
@@ -238,7 +242,6 @@ func (a *App) runGUI(args []string) error {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		b = []byte(strings.ReplaceAll(string(b), "__BASE__", base))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(b)
 	})
@@ -246,10 +249,10 @@ func (a *App) runGUI(args []string) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
 	}
-	mux.HandleFunc(base+"/api/ping", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]any{"ok": true, "version": appVersion})
 	})
-	mux.HandleFunc(base+"/api/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		st, _ := a.status(false)
 		su, _ := a.selfUpdateStatus(false)
 		packageAuto := packageAutoUpdateActive()
@@ -258,8 +261,8 @@ func (a *App) runGUI(args []string) error {
 			PackageAutoUpdate: packageAuto, LauncherAutoUpdate: launcherAuto, SelfUpdateMode: su.Mode,
 			Platform: detectPlatform(), Game: a.gameStatus(), Launcher: st, ActiveJob: jobs.active()})
 	})
-	mux.HandleFunc(base+"/api/job/", func(w http.ResponseWriter, r *http.Request) {
-		j := jobs.get(strings.TrimPrefix(r.URL.Path, base+"/api/job/"))
+	mux.HandleFunc("/api/job/", func(w http.ResponseWriter, r *http.Request) {
+		j := jobs.get(strings.TrimPrefix(r.URL.Path, "/api/job/"))
 		if j == nil {
 			http.NotFound(w, r)
 			return
@@ -268,13 +271,18 @@ func (a *App) runGUI(args []string) error {
 	})
 
 	var srv *http.Server
-	mux.HandleFunc(base+"/api/action/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/action/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", 405)
 			return
 		}
-		action := strings.TrimPrefix(r.URL.Path, base+"/api/action/")
+		action := strings.TrimPrefix(r.URL.Path, "/api/action/")
 		if action == "restart" {
+			// Re-exec would kill a running setup/maintenance job mid-write.
+			if active := jobs.active(); active != nil {
+				http.Error(w, friendlyActionName(active.Action)+" läuft noch", 409)
+				return
+			}
 			target := a.stableExecutable()
 			if target == "" {
 				http.Error(w, "launcher executable not found", 500)
@@ -351,12 +359,12 @@ func (a *App) runGUI(args []string) error {
 		}()
 		jsonOut(w, j)
 	})
-	mux.HandleFunc(base+"/api/open/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/open/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", 405)
 			return
 		}
-		what := strings.TrimPrefix(r.URL.Path, base+"/api/open/")
+		what := strings.TrimPrefix(r.URL.Path, "/api/open/")
 		var path string
 		switch what {
 		case "downloads":
@@ -374,9 +382,13 @@ func (a *App) runGUI(args []string) error {
 		jsonOut(w, map[string]string{"state": "opened"})
 	})
 
-	srv = &http.Server{Handler: secure(mux), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
-	url := "http://" + listener.Addr().String() + base + "/"
-	if err := a.writeGUIInfo(guiInstanceInfo{PID: os.Getpid(), URL: url, Started: time.Now().Format(time.RFC3339)}); err != nil {
+	srv = &http.Server{Handler: secure(auth.wrap(authenticated(mux))), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	if err := a.writeGUIInfo(guiInstanceInfo{PID: os.Getpid(), Addr: auth.addr, Control: auth.control, Started: time.Now().Format(time.RFC3339)}); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	url, err := auth.loginURL()
+	if err != nil {
 		_ = listener.Close()
 		return err
 	}

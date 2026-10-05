@@ -28,15 +28,13 @@ Runtime detection uses `/etc/os-release` first and then the native package manag
 
 Foreign package tools in `$PATH` do not override the detected distro family.
 
-## One-command project installer
-
-From an extracted project/release bundle:
+## One-command installer
 
 ```bash
-./INSTALLIEREN.sh
+bash <(wget -qO- https://github.com/b1tk1ll3r/sc-lnx-inst/releases/latest/download/install.sh)
 ```
 
-It prefers the native package when it is present in `dist/`. On immutable systems, or when a native package is not available, it intentionally falls back to the user installation instead of modifying the base OS outside its package manager.
+It verifies the signed release checksums and installs the native package for the detected family. On immutable systems, or when no native package manager is available, it intentionally falls back to the user installation instead of modifying the base OS outside its package manager.
 
 ## Native package build inputs
 
@@ -46,7 +44,7 @@ It prefers the native package when it is present in `dist/`. On immutable system
 - Generic Linux: `packaging/build-tarball.sh`
 - Available formats on the current build host: `packaging/build-all.sh`
 
-Gitea Actions builds RPM and Arch packages inside native Fedora and Arch container jobs on CI/release runs.
+GitHub Actions builds RPM and Arch packages inside native Fedora and Arch container jobs and install-tests them on Debian, Ubuntu, Fedora, openSUSE Tumbleweed and Arch (see `.github/workflows/packages.yml`).
 
 ## Immutable distributions
 

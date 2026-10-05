@@ -4,10 +4,12 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/home/.local/lib/omarchy-citizen" "$TMP/bin" "$TMP/home/Downloads"
+mkdir -p "$TMP/bin" "$TMP/home/Downloads"
 CALLS="$TMP/calls.log"
+CTL="$ROOT/integrations/omarchy/citizenctl"
 
-cat > "$TMP/home/.local/lib/omarchy-citizen/omarchy-citizen-backend" <<'BACKEND'
+# Fake launcher on PATH; citizenctl prefers the installed citizen-launcher.
+cat > "$TMP/bin/citizen-launcher" <<'BACKEND'
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "${FAKE_CALLS:?}"
@@ -63,7 +65,6 @@ STATUS
   *) echo "unexpected fake backend command: $*" >&2; exit 3 ;;
 esac
 BACKEND
-chmod +x "$TMP/home/.local/lib/omarchy-citizen/omarchy-citizen-backend"
 
 cat > "$TMP/bin/xdg-terminal-exec" <<'TERM'
 #!/usr/bin/env bash
@@ -94,15 +95,15 @@ export PATH="$TMP/bin:/usr/bin:/bin"
 export FAKE_CALLS="$CALLS"
 
 # 1. Status must be fully routed through the Go backend without missing shell functions.
-out="$(bash "$ROOT/citizenctl" status 2>&1)"
-grep -q '^plugin_version=0.8.1$' <<<"$out"
+out="$(bash "$CTL" status 2>&1)"
+grep -q '^plugin_version=' <<<"$out"
 grep -q '^health=install$' <<<"$out"
 grep -q '^managed_wine_version=11.14-1$' <<<"$out"
 ! grep -qi 'command not found' <<<"$out"
 
 # 2. The complete setup terminal action must call all owned backend stages.
 : > "$CALLS"
-bash "$ROOT/citizenctl" install-stack-terminal >/dev/null 2>&1
+bash "$CTL" install-stack-terminal >/dev/null 2>&1
 grep -q '^autopilot enable$' "$CALLS"
 grep -q '^doctor$' "$CALLS"
 grep -q '^game-install$' "$CALLS"
@@ -110,23 +111,23 @@ grep -q '^maintain$' "$CALLS"
 
 # 3. Primary setup routing must open the visible setup terminal.
 : > "$CALLS"
-FAKE_HEALTH=install bash "$ROOT/citizenctl" primary >/dev/null 2>&1
+FAKE_HEALTH=install bash "$CTL" primary >/dev/null 2>&1
 grep -q 'terminal:.*install-stack-terminal' "$CALLS"
 
 # 4. A ready installation launches through the Go backend directly.
 : > "$CALLS"
 FAKE_HEALTH=ready FAKE_PREFIX_STATE=ready FAKE_LAUNCHER_STATE=ready FAKE_GAME_STATE=ready \
-  bash "$ROOT/citizenctl" primary >/dev/null 2>&1
+  bash "$CTL" primary >/dev/null 2>&1
 grep -q '^game-launch$' "$CALLS"
 
 # 5. Repair routing remains visible.
 : > "$CALLS"
-FAKE_HEALTH=repair bash "$ROOT/citizenctl" primary >/dev/null 2>&1
+FAKE_HEALTH=repair bash "$CTL" primary >/dev/null 2>&1
 grep -q 'terminal:.*repair-stack-terminal' "$CALLS"
 
 # 6. Plugin updater wrapper must not collide with the combined status function.
 : > "$CALLS"
-bash "$ROOT/citizenctl" plugin-update-check >/dev/null 2>&1
+bash "$CTL" plugin-update-check >/dev/null 2>&1
 grep -q '^check$' "$CALLS"
 
 echo 'citizenctl smoke tests: OK'

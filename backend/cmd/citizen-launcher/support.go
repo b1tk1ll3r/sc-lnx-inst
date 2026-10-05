@@ -27,7 +27,8 @@ func (a *App) createSupportBundle() (string, error) {
 		return "", err
 	}
 	target := filepath.Join(downloads, "Citizen-Launcher-Support-"+id+".tar.gz")
-	f, err := os.Create(target)
+	// O_EXCL + 0600: the bundle contains logs and must not be world-readable.
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +186,7 @@ func sanitizeSupport(in []byte, home string) []byte {
 		{`(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b`, "<mac>"},
 		{`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`, "Bearer <redacted>"},
 		{`\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`, "<jwt>"},
-		{`(?i)(authorization|token|access_token|refresh_token|secret|password|passwd|cookie|session)\s*[:=]\s*[^\s,;]+`, "$1=<redacted>"},
+		{`(?i)"?(authorization|token|access_token|refresh_token|secret|password|passwd|cookie|session|session_id|sessionid|handle|nickname|geid)"?\s*[:=]\s*"?[^\s",;]+"?`, "$1=<redacted>"},
 		{`(?i)([?&](?:token|access_token|refresh_token|session|auth|key|secret)=)[^&#\s]+`, "$1<redacted>"},
 	}
 	for _, p := range patterns {

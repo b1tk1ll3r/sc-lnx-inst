@@ -1,6 +1,6 @@
 [Unit]
 Description=Citizen Launcher automatic package update
-Documentation=https://github.com/sendnwv/omarchy-sc
+Documentation=https://github.com/b1tk1ll3r/sc-lnx-inst
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/usr/bin/citizen-launcher
@@ -11,6 +11,27 @@ ExecStart=/usr/bin/citizen-launcher self-update apply --system --quiet
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+TimeoutStartSec=30min
+# System services get no $HOME; give the updater its own root-owned state dir
+# (ProtectHome=true hides /root anyway).
+Environment=HOME=/var/lib/citizen-launcher
+StateDirectory=citizen-launcher
+StateDirectoryMode=0700
+CacheDirectory=citizen-launcher
+CacheDirectoryMode=0755
+UMask=0022
+# Sandboxing: the updater must write /usr, /etc, /var (package database) via the
+# native package manager and package scriptlets run sysctl, so ProtectSystem,
+# ProtectKernelTunables and MemoryDenyWriteExecute are intentionally not used.
 PrivateTmp=true
 ProtectHome=true
-UMask=0022
+NoNewPrivileges=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+SystemCallArchitectures=native

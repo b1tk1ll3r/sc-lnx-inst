@@ -7,14 +7,14 @@ The release source is read from `/etc/citizen-launcher/release-repo`. Supported 
 - `github:owner/repository` (legacy `owner/repository` is also accepted)
 - `gitea:https://gitea.example/api/v1/repos/owner/repository`
 
-For privileged system updates, Gitea sources intentionally require HTTPS and the root-owned config file must not be group/world writable. Gitea workflow builds inject their own `${{ gitea.api_url }}` and repository automatically.
+For privileged system updates, Gitea sources intentionally require HTTPS and the root-owned config file must not be group/world writable. The GitHub release workflow injects `github:<owner>/<repo>` of the building repository automatically. All downloads (API, checksums, packages, redirects) must be HTTPS, and only plain `X.Y.Z` release tags are accepted as update targets.
 
 Every privileged update follows the same fail-closed chain:
 
 1. read and validate the trusted release source;
 2. resolve the newest stable release;
 3. select only the package format matching the installed package database;
-4. require SHA-256 metadata (GitHub API digest or the Gitea release `SHA256SUMS.txt`);
+4. require `SHA256SUMS.txt` with a valid Ed25519 signature (`SHA256SUMS.txt.sig`) by an embedded release key; asset digests come only from that signed list (a contradicting GitHub API digest aborts the update);
 5. download to `/var/cache/citizen-launcher`;
 6. verify SHA-256;
 7. inspect package name, upstream version and x86-64 architecture;

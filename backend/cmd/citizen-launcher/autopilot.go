@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -552,7 +553,14 @@ func (a *App) activateRunnerForPrefix(runner string) {
 	if err != nil {
 		return
 	}
-	want := `export wine_path="` + filepath.Join(runner, "bin") + `"`
+	binDir := filepath.Join(runner, "bin")
+	// The path is embedded in a double-quoted shell assignment; refuse anything
+	// that could break out of it (runner names derive from upstream tag names).
+	if strings.ContainsAny(binDir, "\"$`\\\n") {
+		a.logf("refusing unsafe Wine runner path for launch script: %q", binDir)
+		return
+	}
+	want := `export wine_path="` + binDir + `"`
 	lines := strings.Split(string(data), "\n")
 	found := false
 	for i, line := range lines {
@@ -812,7 +820,7 @@ func githubRecent(repo string, limit int) ([]githubRelease, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := httpsClient(45 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -881,7 +889,7 @@ func githubLatest(repo string) (githubRelease, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := httpsClient(45 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return rel, err
@@ -938,13 +946,50 @@ func selectAsset(assets []githubAsset, match func(string) bool) (githubAsset, er
 	return candidates[0], nil
 }
 
+// errInsecureURL is returned for any download or redirect target that is not
+// HTTPS. Every payload this launcher fetches (packages, runners, DXVK, RSI) is
+// executed later, partly as root, so plaintext transport is never acceptable.
+var errInsecureURL = errors.New("refusing non-HTTPS download URL")
+
+func requireHTTPS(raw string) error {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return fmt.Errorf("%w: %s", errInsecureURL, u.Redacted())
+	}
+	return nil
+}
+
+// httpsClient follows at most 10 redirects and only to HTTPS targets; Go's
+// default client would also follow an HTTPS->HTTP downgrade.
+func httpsClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			return requireHTTPS(req.URL.String())
+		},
+	}
+}
+
+// maxDownloadBytes bounds any single download (largest legitimate payload is a
+// Wine runner archive of a few hundred MiB).
+const maxDownloadBytes = 4 << 30
+
 func download(url, target string) error {
+	if err := requireHTTPS(url); err != nil {
+		return err
+	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", "citizen-launcher/"+appVersion)
-	client := &http.Client{Timeout: 20 * time.Minute}
+	client := httpsClient(20 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -960,7 +1005,10 @@ func download(url, target string) error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(f, resp.Body)
+	n, copyErr := io.Copy(f, io.LimitReader(resp.Body, maxDownloadBytes+1))
+	if copyErr == nil && n > maxDownloadBytes {
+		copyErr = fmt.Errorf("download exceeds %d bytes", int64(maxDownloadBytes))
+	}
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(target)
@@ -1151,12 +1199,11 @@ func (a *App) acquireMaintenanceLock() (func(), error) {
 }
 
 func verifyReleaseDigest(path, digest string) error {
-	if digest == "" {
-		return nil
-	}
-	parts := strings.SplitN(digest, ":", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "sha256" {
-		return nil
+	// Fail closed: callers that tolerate a missing digest must decide so
+	// explicitly before calling; an absent/unknown digest is never "verified".
+	parts := strings.SplitN(strings.TrimSpace(digest), ":", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "sha256" || len(strings.TrimSpace(parts[1])) != 64 {
+		return fmt.Errorf("no usable SHA-256 digest for %s", filepath.Base(path))
 	}
 	want := strings.ToLower(strings.TrimSpace(parts[1]))
 	got, err := fileHash(path)

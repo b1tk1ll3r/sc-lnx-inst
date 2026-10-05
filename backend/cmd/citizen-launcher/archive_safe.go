@@ -218,6 +218,7 @@ func extractTarReaderSafe(r io.Reader, dir string) error {
 			return err
 		}
 	}
+	var symlinks []string
 	for _, link := range links {
 		if link.hard {
 			continue
@@ -242,6 +243,23 @@ func extractTarReaderSafe(r io.Reader, dir string) error {
 		_ = os.Remove(dst)
 		if err := os.Symlink(filepath.FromSlash(link.linkname), dst); err != nil {
 			return err
+		}
+		symlinks = append(symlinks, dst)
+	}
+	// The per-link check above is textual. A chain such as `a -> ..` plus
+	// `b -> a/..` passes it but resolves outside root, so re-check every link
+	// against the real filesystem once all of them exist.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	for _, dst := range symlinks {
+		resolved, err := filepath.EvalSymlinks(dst)
+		if err != nil {
+			continue // dangling link: never followed outside root
+		}
+		if !pathInside(realRoot, resolved) {
+			return fmt.Errorf("Symlink-Kette verlässt Zielverzeichnis: %q", dst)
 		}
 	}
 	return nil
