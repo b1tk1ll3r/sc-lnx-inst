@@ -235,8 +235,8 @@ GitHub Actions workflows live in [`.github/workflows/`](.github/workflows):
 
 ```bash
 echo 1.2.0 > VERSION   # also update RELEASE_NOTES.md (used as the release body)
-git commit -am "v1.2.0"
-git tag v1.2.0
+git commit -S -am "v1.2.0"            # GPG-signed commit
+git tag -s v1.2.0 -m "Citizen Launcher 1.2.0"   # GPG-signed tag
 git push origin main v1.2.0
 ```
 
