@@ -1,4 +1,4 @@
-# Tag-driven release: push a tag `vX.Y.Z` that matches VERSION.
+# Tag-driven release: push a tag `vX.Y.Z`. Package versions come from VERSION.
 # All packages are built by the same reusable pipeline as CI, then published in
 # one step together with install.sh, SHA256SUMS.txt, its Ed25519 signature
 # (SHA256SUMS.txt.sig) and build-provenance attestations. Finally the published
@@ -24,29 +24,8 @@ defaults:
     shell: bash
 
 jobs:
-  check-tag:
-    name: Tag matches VERSION
-    runs-on: self-hosted
-    steps:
-      - name: Repair workspace ownership
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/workspace" \
-            debian:13 \
-            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - run: |
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          if [[ "$GITHUB_REF_NAME" != "v${VERSION}" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION file (v${VERSION})"
-            exit 1
-          fi
-
   packages:
     name: Build
-    needs: check-tag
     uses: ./.github/workflows/packages.yml
     with:
       release-repo: github:${{ github.repository }}
