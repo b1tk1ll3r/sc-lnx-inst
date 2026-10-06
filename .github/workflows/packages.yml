@@ -1,6 +1,13 @@
 # Reusable pipeline: regression suite, one static backend build and native
 # packages for every supported family. Called by ci.yml and release.yml so CI
 # exercises exactly the release build path.
+#
+# IMPORTANT for persistent self-hosted runners:
+# - Never use job-level `container:` for jobs that touch GITHUB_WORKSPACE.
+#   GitHub runs those containers as root, which can leave root-owned files in
+#   the persistent workspace and make the next actions/checkout cleanup fail.
+# - Package containers below receive the checkout read-only. Build output is
+#   copied back with `docker cp`, which creates local files as the runner user.
 name: Build and verify packages
 
 on:
@@ -19,7 +26,6 @@ env:
 
 defaults:
   run:
-    # Container jobs default to `sh`; force bash with -eo pipefail everywhere.
     shell: bash
 
 jobs:
@@ -28,6 +34,13 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 20
     steps:
+      # Recovers automatically from files left root-owned by older container jobs.
+      - name: Repair workspace ownership
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -35,10 +48,21 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - name: Install verification dependencies
+      - name: Check verification dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-yaml dpkg-dev zstd jq shellcheck openssl
+          missing=()
+          for cmd in python3 dpkg-deb dpkg-buildpackage zstd jq shellcheck openssl; do
+            command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+          done
+          if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import yaml' >/dev/null 2>&1; then
+            missing+=(python3-yaml)
+          fi
+          if ((${#missing[@]})); then
+            printf '::error::Missing self-hosted runner dependencies: %s\n' "${missing[*]}"
+            echo 'Install once on the Debian runner host:'
+            echo '  sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-yaml dpkg-dev zstd jq shellcheck openssl'
+            exit 1
+          fi
       - name: ShellCheck (errors only)
         run: shellcheck -S error $(git ls-files '*.sh') integrations/omarchy/citizenctl
       - name: Full regression suite
@@ -49,6 +73,12 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
+      - name: Repair workspace ownership
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -77,6 +107,12 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 15
     steps:
+      - name: Repair workspace ownership
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -117,12 +153,13 @@ jobs:
     needs: backend
     runs-on: self-hosted
     timeout-minutes: 15
-    container: fedora:44
     steps:
-      - name: Install build tools
+      - name: Repair workspace ownership
         run: |
-          dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install git-core rpm-build
-          dnf clean all
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -130,26 +167,42 @@ jobs:
         with:
           name: backend-bin
           path: backend/bin
-      - name: Build RPM
-        run: |
-          chmod 0755 backend/bin/citizen-launcher
-          bash ./packaging/build-rpm.sh
-      - name: Inspect RPM
+      - name: Build, inspect and smoke-test RPM in Fedora
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
           RPM="dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
-          rpm -qpi "$RPM"
-          rpm -qpl "$RPM"
-          test "$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "$RPM")" = "citizen-launcher ${VERSION} x86_64"
-          # No debuginfo/build-id artefacts may leak into the payload.
-          ! rpm -qpl "$RPM" | grep -q '/usr/lib/.build-id'
-      - name: Install smoke test (Fedora)
-        run: |
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          dnf -y --setopt=install_weak_deps=False install "./dist/citizen-launcher-${VERSION}-1.linux.x86_64.rpm"
-          test "$(citizen-launcher --version)" = "$VERSION"
-          rpm -V citizen-launcher
-          dnf -y remove citizen-launcher
+
+          cid="$(docker create \
+            -e "CITIZEN_LAUNCHER_RELEASE_REPO=$CITIZEN_LAUNCHER_RELEASE_REPO" \
+            -e "VERSION=$VERSION" \
+            -e "RPM=$RPM" \
+            -v "$PWD:/src:ro" \
+            fedora:44 \
+            bash -euo pipefail -c '
+              dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install git-core rpm-build
+              mkdir -p /work
+              cp -a /src/. /work/
+              cd /work
+              chmod 0755 backend/bin/citizen-launcher
+              bash ./packaging/build-rpm.sh
+              rpm -qpi "$RPM"
+              rpm -qpl "$RPM"
+              test "$(rpm -qp --qf "%{NAME} %{VERSION} %{ARCH}" "$RPM")" = "citizen-launcher ${VERSION} x86_64"
+              ! rpm -qpl "$RPM" | grep -q "/usr/lib/.build-id"
+              dnf -y --setopt=install_weak_deps=False install "./$RPM"
+              test "$(citizen-launcher --version)" = "$VERSION"
+              rpm -V citizen-launcher
+              dnf -y remove citizen-launcher
+            ')"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker start -a "$cid"
+          mkdir -p dist
+          docker cp "$cid:/work/$RPM" "$RPM"
+          docker rm "$cid" >/dev/null
+          trap - EXIT
+
+          # docker cp creates the local file as the user invoking docker cp.
+          test "$(stat -c %u "$RPM")" = "$(id -u)"
       - uses: actions/upload-artifact@v7
         with:
           name: pkg-rpm
@@ -162,30 +215,44 @@ jobs:
     needs: rpm
     runs-on: self-hosted
     timeout-minutes: 15
-    container: opensuse/tumbleweed
     steps:
+      - name: Repair workspace ownership
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
+          rm -rf dist
       - uses: actions/download-artifact@v8
         with:
           name: pkg-rpm
           path: dist
-      - name: Install and run
+      - name: Install and run in openSUSE
         run: |
-          RPM="$(ls dist/citizen-launcher-*-1.linux.x86_64.rpm)"
-          VERSION="$(rpm -qp --qf '%{VERSION}' "$RPM")"
-          zypper --non-interactive refresh
-          zypper --non-interactive install --allow-unsigned-rpm "$RPM"
-          test "$(citizen-launcher --version)" = "$VERSION"
-          rpm -V citizen-launcher
+          docker run --rm \
+            -v "$PWD/dist:/dist:ro" \
+            opensuse/tumbleweed \
+            bash -euo pipefail -c '
+              RPM="$(ls /dist/citizen-launcher-*-1.linux.x86_64.rpm)"
+              VERSION="$(rpm -qp --qf "%{VERSION}" "$RPM")"
+              zypper --non-interactive refresh
+              zypper --non-interactive install --allow-unsigned-rpm "$RPM"
+              test "$(citizen-launcher --version)" = "$VERSION"
+              rpm -V citizen-launcher
+            '
 
   arch:
     name: pacman package (Arch Linux)
     needs: backend
     runs-on: self-hosted
     timeout-minutes: 15
-    container: archlinux:base-devel
     steps:
-      - name: Install build tools
-        run: pacman -Syu --noconfirm --needed git
+      - name: Repair workspace ownership
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            debian:13 \
+            chown -R --no-dereference "$(id -u):$(id -g)" /workspace
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -193,27 +260,39 @@ jobs:
         with:
           name: backend-bin
           path: backend/bin
-      - name: Build package as unprivileged user
+      - name: Build and smoke-test package in Arch Linux
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
-          chmod 0755 backend/bin/citizen-launcher
-          # makepkg refuses to run as root; build in a private copy owned by an
-          # unprivileged user so the workspace itself stays root-owned.
-          useradd -m builder
-          BUILD=/tmp/pkgbuild/src
-          mkdir -p "$BUILD"
-          cp -a . "$BUILD"
-          chown -R builder:builder /tmp/pkgbuild
-          (cd "$BUILD" && runuser -u builder -- env "CITIZEN_LAUNCHER_RELEASE_REPO=$CITIZEN_LAUNCHER_RELEASE_REPO" bash ./packaging/build-arch.sh)
+          PKG="dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst"
+
+          cid="$(docker create \
+            -e "CITIZEN_LAUNCHER_RELEASE_REPO=$CITIZEN_LAUNCHER_RELEASE_REPO" \
+            -e "VERSION=$VERSION" \
+            -e "PKG=$PKG" \
+            -v "$PWD:/src:ro" \
+            archlinux:base-devel \
+            bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed git
+              useradd -m builder
+              mkdir -p /work
+              cp -a /src/. /work/
+              chown -R builder:builder /work
+              chmod 0755 /work/backend/bin/citizen-launcher
+              cd /work
+              runuser -u builder -- env "CITIZEN_LAUNCHER_RELEASE_REPO=$CITIZEN_LAUNCHER_RELEASE_REPO" bash ./packaging/build-arch.sh
+              pacman -U --noconfirm "$PKG"
+              test "$(citizen-launcher --version)" = "$VERSION"
+              pacman -Qkk citizen-launcher
+              pacman -R --noconfirm citizen-launcher
+            ')"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker start -a "$cid"
           mkdir -p dist
-          cp "$BUILD/dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst" dist/
-      - name: Install smoke test (Arch)
-        run: |
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          pacman -U --noconfirm "dist/citizen-launcher-${VERSION}-1-x86_64.pkg.tar.zst"
-          test "$(citizen-launcher --version)" = "$VERSION"
-          pacman -Qkk citizen-launcher
-          pacman -R --noconfirm citizen-launcher
+          docker cp "$cid:/work/$PKG" "$PKG"
+          docker rm "$cid" >/dev/null
+          trap - EXIT
+
+          test "$(stat -c %u "$PKG")" = "$(id -u)"
       - uses: actions/upload-artifact@v7
         with:
           name: pkg-arch
